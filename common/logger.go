@@ -33,8 +33,8 @@ import (
 )
 
 type Logger struct {
+	*logrus.Logger
 	ctx            context.Context
-	logger         *logrus.Logger
 	mu             sync.Mutex
 	lastLogCall    int64
 	debugOverride  bool
@@ -49,8 +49,8 @@ func NullLogger() *logrus.Logger {
 
 func NewLogger(ctx context.Context, logger *logrus.Logger, debugOverride bool, categoryFilter *regexp.Regexp) *Logger {
 	l := Logger{
+		Logger:         logger,
 		ctx:            ctx,
-		logger:         logger,
 		mu:             sync.Mutex{},
 		debugOverride:  debugOverride,
 		categoryFilter: categoryFilter,
@@ -87,13 +87,13 @@ func (l *Logger) Logf(level logrus.Level, category string, msg string, args ...i
 
 	if l.categoryFilter == nil || l.categoryFilter.Match([]byte(category)) {
 		magenta := color.New(color.FgMagenta).SprintFunc()
-		if l.logger != nil {
-			entry := l.logger.WithFields(logrus.Fields{
+		if l.Logger != nil {
+			entry := l.Logger.WithFields(logrus.Fields{
 				"category":  magenta(category),
 				"elapsed":   fmt.Sprintf("%d ms", elapsed),
 				"goroutine": goRoutineID(),
 			})
-			if l.logger.GetLevel() < level && l.debugOverride {
+			if l.Logger.GetLevel() < level && l.debugOverride {
 				entry.Printf(msg, args...)
 			} else {
 				entry.Logf(level, msg, args...)

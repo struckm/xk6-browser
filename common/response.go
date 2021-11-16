@@ -32,6 +32,7 @@ import (
 	"github.com/chromedp/cdproto/network"
 	"github.com/dop251/goja"
 	"github.com/grafana/xk6-browser/api"
+	"github.com/sirupsen/logrus"
 	k6common "go.k6.io/k6/js/common"
 	k6lib "go.k6.io/k6/lib"
 )
@@ -197,7 +198,11 @@ func (r *Response) bodySize() int64 {
 	}
 
 	if err := r.fetchBody(); err != nil {
-		r.logger.Warnf("cdp", "error fetching response body for '%s': %s", r.url, err)
+		r.logger.WithFields(logrus.Fields{
+			"category": "cdp",
+			"url":      r.url,
+			"method":   r.request.method,
+		}).WithError(err).Warn("error fetching response body")
 	}
 
 	r.bodyMu.RLock()

@@ -34,6 +34,7 @@ import (
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
 	"github.com/dop251/goja"
+	"github.com/sirupsen/logrus"
 	k6common "go.k6.io/k6/js/common"
 	k6lib "go.k6.io/k6/lib"
 	k6stats "go.k6.io/k6/stats"
@@ -343,7 +344,13 @@ func (m *NetworkManager) onRequest(event *network.EventRequestWillBeSent, interc
 		frame = m.frameManager.getFrameByID(event.FrameID)
 	}
 	if frame == nil {
-		m.logger.Debugf("NetworkManager", "frame is nil")
+		m.logger.WithFields(logrus.Fields{
+			"category": "NetworkManager",
+			"url":      event.Request.URL,
+			"method":   event.Request.Method,
+			"type":     event.Initiator.Type,
+			"frame_id": event.FrameID,
+		}).Debug("frame is nil")
 	}
 
 	req, err := NewRequest(m.ctx, event, frame, redirectChain, interceptionID, m.userReqInterceptionEnabled)

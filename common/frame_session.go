@@ -325,7 +325,13 @@ func (fs *FrameSession) initIsolatedWorld(name string) error {
 	action2 := cdppage.AddScriptToEvaluateOnNewDocument(`//# sourceURL=` + evaluationScriptURL).
 		WithWorldName(name)
 	if _, err := action2.Do(cdp.WithExecutor(fs.ctx, fs.session)); err != nil {
+		// TODO: find out whether select is necessary here
+		// select {
+		// case <-fs.ctx.Done():
+		// 	return nil
+		// default:
 		return fmt.Errorf("unable to add script to evaluate for isolated world: %w", err)
+		// }
 	}
 	return nil
 }
@@ -505,6 +511,10 @@ func (fs *FrameSession) onExecutionContextCreated(event *runtime.EventExecutionC
 	fs.logger.Debugf("NewFrameSession:onExecutionContextCreated",
 		"sid:%v tid:%v ectxid:%v", fs.session.id, fs.targetID, event.Context.ID)
 
+	// TODO: find out is it necessary to do so function-wide
+	fs.contextIDToContextMu.Lock()
+	defer fs.contextIDToContextMu.Unlock()
+
 	auxData := event.Context.AuxData
 	var i struct {
 		FrameID   cdp.FrameID `json:"frameId"`
@@ -533,9 +543,7 @@ func (fs *FrameSession) onExecutionContextCreated(event *runtime.EventExecutionC
 	if world != "" {
 		frame.setContext(world, context)
 	}
-	fs.contextIDToContextMu.Lock()
 	fs.contextIDToContext[event.Context.ID] = context
-	fs.contextIDToContextMu.Unlock()
 }
 
 func (fs *FrameSession) onExecutionContextDestroyed(execCtxID runtime.ExecutionContextID) {
@@ -560,9 +568,10 @@ func (fs *FrameSession) onExecutionContextsCleared() {
 
 	fs.contextIDToContextMu.Lock()
 	defer fs.contextIDToContextMu.Unlock()
+
 	for _, context := range fs.contextIDToContext {
 		if context.Frame() != nil {
-			context.Frame().nullContexts()
+			context.Frame().nullContext(context.id)
 		}
 	}
 	for k := range fs.contextIDToContext {
@@ -757,13 +766,30 @@ func (fs *FrameSession) onAttachedToTarget(event *target.EventAttachedToTarget) 
 				// If we're no longer connected to browser, then ignore WebSocket errors
 				return
 			}
-			k6Throw(fs.ctx, "cannot create frame session: %w", err)
+			// TODO: onceden yoktu
+			select {
+			case <-fs.ctx.Done():
+				fs.logger.Debugf("FrameSession:onAttachedToTarget:NewFrameSession:<-ctx.Done",
+					"sid:%v tid:%v esid:%v etid:%v ebctxid:%v type:%q",
+					fs.session.id, fs.targetID, event.SessionID,
+					event.TargetInfo.TargetID, event.TargetInfo.BrowserContextID,
+					event.TargetInfo.Type)
+				return
+			default:
+				k6Throw(fs.ctx, "cannot create frame session (iframe): %w", err)
+			}
 		}
 		fs.page.frameSessions[cdp.FrameID(targetID)] = frameSession
 		return
 	}
 
 	if event.TargetInfo.Type != "worker" {
+		fs.logger.Debugf("FrameSession:onAttachedToTarget returns: target is not a worker",
+			"sid:%v tid:%v esid:%v etid:%v ebctxid:%v type:%q",
+			fs.session.id, fs.targetID, event.SessionID,
+			event.TargetInfo.TargetID, event.TargetInfo.BrowserContextID,
+			event.TargetInfo.Type)
+
 		// Just unblock (debugger continue) these targets and detach from them.
 		session.ExecuteWithoutExpectationOnReply(fs.ctx, runtime.CommandRunIfWaitingForDebugger, nil, nil)
 		session.ExecuteWithoutExpectationOnReply(fs.ctx, target.CommandDetachFromTarget, &target.DetachFromTargetParams{SessionID: session.id}, nil)
@@ -776,6 +802,17 @@ func (fs *FrameSession) onAttachedToTarget(event *target.EventAttachedToTarget) 
 		if !fs.page.browserCtx.browser.connected && strings.Contains(err.Error(), "websocket: close 1006 (abnormal closure)") {
 			// If we're no longer connected to browser, then ignore WebSocket errors
 			return
+		}
+		select {
+		case <-fs.ctx.Done():
+			fs.logger.Debugf("FrameSession:onAttachedToTarget:NewWorker:<-ctx.Done",
+				"sid:%v tid:%v esid:%v etid:%v ebctxid:%v type:%q",
+				fs.session.id, fs.targetID, event.SessionID,
+				event.TargetInfo.TargetID, event.TargetInfo.BrowserContextID,
+				event.TargetInfo.Type)
+			return
+		default:
+			k6Throw(fs.ctx, "cannot create frame session (worker): %w", err)
 		}
 		k6Throw(fs.ctx, "cannot create new worker: %w", err)
 	}

@@ -180,9 +180,14 @@ func (f *Frame) recalculateLifecycle() {
 	f.childFramesMu.RLock()
 	{
 		for child := range f.childFrames {
-			child.(*Frame).recalculateLifecycle()
+			cf := child.(*Frame)
+			// a precaution for preventing a deadlock in *Frame.childFramesMu
+			if cf == f {
+				continue
+			}
+			cf.recalculateLifecycle()
 			for k := range events {
-				if !child.(*Frame).hasSubtreeLifecycleEventFired(k) {
+				if !cf.hasSubtreeLifecycleEventFired(k) {
 					delete(events, k)
 				}
 			}
@@ -193,13 +198,19 @@ func (f *Frame) recalculateLifecycle() {
 	// Check if any of the fired events should be considered fired when looking at the entire subtree.
 	mainFrame := f.manager.mainFrame
 	for k := range events {
-		if !f.hasSubtreeLifecycleEventFired(k) {
-			f.emit(EventFrameAddLifecycle, k)
-			if f == mainFrame && k == LifecycleEventLoad {
-				f.page.emit(EventPageLoad, nil)
-			} else if f == mainFrame && k == LifecycleEventDOMContentLoad {
-				f.page.emit(EventPageDOMContentLoaded, nil)
-			}
+		if f.hasSubtreeLifecycleEventFired(k) {
+			continue
+		}
+		f.emit(EventFrameAddLifecycle, k)
+
+		if f != mainFrame {
+			continue
+		}
+		switch k {
+		case LifecycleEventLoad:
+			f.page.emit(EventPageLoad, nil)
+		case LifecycleEventDOMContentLoad:
+			f.page.emit(EventPageDOMContentLoaded, nil)
 		}
 	}
 
@@ -269,10 +280,15 @@ func (f *Frame) document() (*ElementHandle, error) {
 	}
 	f.waitForExecutionContext("main")
 
+	var (
+		result interface{}
+		err    error
+	)
 	f.executionContextMu.RLock()
-	defer f.executionContextMu.RUnlock()
-
-	result, err := f.mainExecutionContext.evaluate(f.ctx, false, false, rt.ToValue("document"), nil)
+	{
+		result, err = f.mainExecutionContext.evaluate(f.ctx, false, false, rt.ToValue("document"), nil)
+	}
+	f.executionContextMu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
@@ -496,13 +512,13 @@ func (f *Frame) waitForSelector(selector string, opts *FrameWaitForSelectorOptio
 
 func (f *Frame) AddScriptTag(opts goja.Value) {
 	rt := k6common.GetRuntime(f.ctx)
-	k6common.Throw(rt, errors.New("Frame.AddScriptTag() has not been implemented yet!"))
+	k6common.Throw(rt, errors.New("Frame.AddScriptTag() has not been implemented yet"))
 	applySlowMo(f.ctx)
 }
 
 func (f *Frame) AddStyleTag(opts goja.Value) {
 	rt := k6common.GetRuntime(f.ctx)
-	k6common.Throw(rt, errors.New("Frame.AddStyleTag() has not been implemented yet!"))
+	k6common.Throw(rt, errors.New("Frame.AddStyleTag() has not been implemented yet"))
 	applySlowMo(f.ctx)
 }
 
@@ -623,11 +639,11 @@ func (f *Frame) Evaluate(pageFunc goja.Value, args ...goja.Value) (result interf
 	f.executionContextMu.RLock()
 	{
 		result, err = f.mainExecutionContext.Evaluate(f.ctx, pageFunc, args...)
-		if err != nil {
-			k6common.Throw(rt, err)
-		}
 	}
 	f.executionContextMu.RUnlock()
+	if err != nil {
+		k6common.Throw(rt, err)
+	}
 
 	applySlowMo(f.ctx)
 	return result
@@ -642,11 +658,11 @@ func (f *Frame) EvaluateHandle(pageFunc goja.Value, args ...goja.Value) (handle 
 	f.executionContextMu.RLock()
 	{
 		handle, err = f.mainExecutionContext.EvaluateHandle(f.ctx, pageFunc, args...)
-		if err != nil {
-			k6common.Throw(rt, err)
-		}
 	}
 	f.executionContextMu.RUnlock()
+	if err != nil {
+		k6common.Throw(rt, err)
+	}
 
 	applySlowMo(f.ctx)
 	return handle
@@ -1086,7 +1102,7 @@ func (f *Frame) SetContent(html string, opts goja.Value) {
 
 func (f *Frame) SetInputFiles(selector string, files goja.Value, opts goja.Value) {
 	rt := k6common.GetRuntime(f.ctx)
-	k6common.Throw(rt, errors.New("Frame.setInputFiles(selector, files, opts) has not been implemented yet!"))
+	k6common.Throw(rt, errors.New("Frame.setInputFiles(selector, files, opts) has not been implemented yet"))
 	// TODO: needs slowMo
 }
 

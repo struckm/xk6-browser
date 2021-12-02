@@ -763,7 +763,6 @@ func (fs *FrameSession) onAttachedToTarget(event *target.EventAttachedToTarget) 
 				// If we're no longer connected to browser, then ignore WebSocket errors
 				return
 			}
-			// TODO: onceden yoktu
 			select {
 			case <-fs.ctx.Done():
 				fs.logger.Debugf("FrameSession:onAttachedToTarget:NewFrameSession:<-ctx.Done",
@@ -776,7 +775,8 @@ func (fs *FrameSession) onAttachedToTarget(event *target.EventAttachedToTarget) 
 				k6Throw(fs.ctx, "cannot create frame session (iframe): %w", err)
 			}
 		}
-		fs.page.frameSessions[cdp.FrameID(targetID)] = frameSession
+
+		fs.page.attachFrameSession(cdp.FrameID(targetID), frameSession)
 		return
 	}
 

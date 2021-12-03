@@ -808,7 +808,6 @@ func (fs *FrameSession) onAttachedToTarget(event *target.EventAttachedToTarget) 
 		default:
 			k6Throw(fs.ctx, "cannot create frame session (worker): %w", err)
 		}
-		k6Throw(fs.ctx, "cannot create new worker: %w", err)
 	}
 	fs.page.workers[session.id] = w
 }

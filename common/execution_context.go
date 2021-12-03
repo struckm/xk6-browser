@@ -98,7 +98,7 @@ func (e *ExecutionContext) adoptBackendNodeId(backendNodeID cdp.BackendNodeID) (
 		WithExecutionContextID(e.id)
 
 	if remoteObj, err = action.Do(cdp.WithExecutor(e.ctx, e.session)); err != nil {
-		return nil, fmt.Errorf("cannot resolve dom node: %w", err)
+		return nil, fmt.Errorf("cannot resolve DOM node: %w", err)
 	}
 
 	return NewJSHandle(e.ctx, e.session, e, e.frame, remoteObj, e.logger).AsElement().(*ElementHandle), nil
@@ -122,7 +122,7 @@ func (e *ExecutionContext) adoptElementHandle(elementHandle *ElementHandle) (*El
 
 	action := dom.DescribeNode().WithObjectID(elementHandle.remoteObject.ObjectID)
 	if node, err = action.Do(cdp.WithExecutor(e.ctx, e.session)); err != nil {
-		return nil, fmt.Errorf("cannot describe dom node: %w", err)
+		return nil, fmt.Errorf("cannot describe DOM node: %w", err)
 	}
 
 	return e.adoptBackendNodeId(node.BackendNodeID)

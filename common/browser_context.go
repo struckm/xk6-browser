@@ -222,6 +222,7 @@ func (b *BrowserContext) NewPage() api.Page {
 		rt := k6common.GetRuntime(b.ctx)
 		k6common.Throw(rt, err)
 	}
+	b.logger.Debugf("BrowserContext:NewPage:returns", "b.id:%v url:%s", b.id, p.URL())
 	return p
 }
 

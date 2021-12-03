@@ -469,7 +469,6 @@ func (f *Frame) setID(id cdp.FrameID) {
 
 func (f *Frame) waitForExecutionContext(world string) {
 	f.log.Debugf("Frame:waitForExecutionContext", "tid:%s furl:%q world:%s", f.id, f.url, world)
-	defer f.log.Debugf("Frame:waitForExecutionContext:return", "tid:%s furl:%q world:%s", f.id, f.url, world)
 
 	wait := func(done chan struct{}) {
 		var ok bool
@@ -1340,7 +1339,6 @@ func (f *Frame) WaitForFunction(pageFunc goja.Value, opts goja.Value, args ...go
 // WaitForLoadState waits for the given load state to be reached
 func (f *Frame) WaitForLoadState(state string, opts goja.Value) {
 	f.log.Debugf("Frame:WaitForLoadState", "tid:%s furl:%q state:%s", f.id, f.url, state)
-	defer f.log.Debugf("Frame:WaitForLoadState:return", "tid:%s furl:%q state:%s", f.id, f.url, state)
 
 	rt := k6common.GetRuntime(f.ctx)
 	parsedOpts := NewFrameWaitForLoadStateOptions(f.defaultTimeout())
@@ -1390,7 +1388,6 @@ func (f *Frame) WaitForTimeout(timeout int64) {
 	to := time.Duration(timeout) * time.Millisecond
 
 	f.log.Debugf("Frame:WaitForTimeout", "tid:%s furl:%q to:%s", f.id, f.url, to)
-	defer f.log.Debugf("Frame:WaitForTimeout:return", "tid:%s furl:%q to:%s", f.id, f.url, to)
 
 	select {
 	case <-f.ctx.Done():

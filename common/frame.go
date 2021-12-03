@@ -314,7 +314,7 @@ func (f *Frame) document() (*ElementHandle, error) {
 		return f.documentHandle, nil
 	}
 
-	f.waitForExecutionContext("main")
+	f.waitForExecutionContext(mainExecutionContext)
 
 	var (
 		result interface{}
@@ -338,9 +338,9 @@ func (f *Frame) hasContext(world string) bool {
 	defer f.executionContextMu.RUnlock()
 
 	switch world {
-	case "main":
+	case mainExecutionContext:
 		return f.mainExecutionContext != nil
-	case "utility":
+	case utilityExecutionContext:
 		return f.utilityExecutionContext != nil
 	}
 	return false // Should never reach here!
@@ -449,11 +449,11 @@ func (f *Frame) setContext(world string, execCtx *ExecutionContext) {
 	defer f.executionContextMu.Unlock()
 
 	switch world {
-	case "main":
+	case mainExecutionContext:
 		if f.mainExecutionContext == nil {
 			f.mainExecutionContext = execCtx
 		}
-	case "utility":
+	case utilityExecutionContext:
 		if f.utilityExecutionContext == nil {
 			f.utilityExecutionContext = execCtx
 		}
@@ -506,7 +506,7 @@ func (f *Frame) waitForFunction(apiCtx context.Context, world string, predicateF
 	defer f.executionContextMu.RUnlock()
 
 	execCtx := f.mainExecutionContext
-	if world == "utility" {
+	if world == utilityExecutionContext {
 		execCtx = f.utilityExecutionContext
 	}
 	injected, err := execCtx.getInjectedScript(apiCtx)
@@ -702,7 +702,7 @@ func (f *Frame) DispatchEvent(selector string, typ string, eventInit goja.Value,
 func (f *Frame) Evaluate(pageFunc goja.Value, args ...goja.Value) (result interface{}) {
 	f.log.Debugf("Frame:Evaluate", "tid:%s furl:%q", f.id, f.url)
 
-	f.waitForExecutionContext("main")
+	f.waitForExecutionContext(mainExecutionContext)
 
 	var (
 		rt  = k6common.GetRuntime(f.ctx)
@@ -725,7 +725,7 @@ func (f *Frame) Evaluate(pageFunc goja.Value, args ...goja.Value) (result interf
 func (f *Frame) EvaluateHandle(pageFunc goja.Value, args ...goja.Value) (handle api.JSHandle) {
 	f.log.Debugf("Frame:EvaluateHandle", "tid:%s furl:%q", f.id, f.url)
 
-	f.waitForExecutionContext("main")
+	f.waitForExecutionContext(mainExecutionContext)
 
 	var (
 		rt  = k6common.GetRuntime(f.ctx)
@@ -1330,7 +1330,7 @@ func (f *Frame) WaitForFunction(pageFunc goja.Value, opts goja.Value, args ...go
 		k6common.Throw(rt, fmt.Errorf("failed parsing options: %w", err))
 	}
 
-	handle, err := f.waitForFunction(f.ctx, "utility", pageFunc, parsedOpts.Polling, parsedOpts.Interval, parsedOpts.Timeout, args...)
+	handle, err := f.waitForFunction(f.ctx, utilityExecutionContext, pageFunc, parsedOpts.Polling, parsedOpts.Interval, parsedOpts.Timeout, args...)
 	if err != nil {
 		k6common.Throw(rt, err)
 	}

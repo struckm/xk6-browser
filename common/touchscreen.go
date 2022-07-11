@@ -22,15 +22,15 @@ package common
 
 import (
 	"context"
-	"fmt"
+
+	"github.com/grafana/xk6-browser/api"
+	"github.com/grafana/xk6-browser/k6ext"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
-	"github.com/grafana/xk6-browser/api"
-	k6common "go.k6.io/k6/js/common"
 )
 
-// Ensure Touchscreen implements the EventEmitter and api.Touchscreen interfaces
+// Ensure Touchscreen implements the EventEmitter and api.Touchscreen interfaces.
 var _ EventEmitter = &Touchscreen{}
 var _ api.Touchscreen = &Touchscreen{}
 
@@ -39,17 +39,17 @@ type Touchscreen struct {
 	BaseEventEmitter
 
 	ctx      context.Context
-	session  *Session
+	session  session
 	keyboard *Keyboard
 }
 
-func NewTouchscreen(ctx context.Context, session *Session, keyboard *Keyboard) *Touchscreen {
-	t := Touchscreen{
+// NewTouchscreen returns a new TouchScreen.
+func NewTouchscreen(ctx context.Context, s session, k *Keyboard) *Touchscreen {
+	return &Touchscreen{
 		ctx:      ctx,
-		session:  session,
-		keyboard: keyboard,
+		session:  s,
+		keyboard: k,
 	}
-	return &t
 }
 
 func (t *Touchscreen) tap(x float64, y float64) error {
@@ -68,8 +68,7 @@ func (t *Touchscreen) tap(x float64, y float64) error {
 
 // Tap dispatches a tap start and tap end event.
 func (t *Touchscreen) Tap(x float64, y float64) {
-	rt := k6common.GetRuntime(t.ctx)
 	if err := t.tap(x, y); err != nil {
-		k6common.Throw(rt, fmt.Errorf("unable to tap: %w", err))
+		k6ext.Panic(t.ctx, "tapping: %w", err)
 	}
 }

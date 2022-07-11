@@ -23,26 +23,30 @@ package browser
 import (
 	"errors"
 
-	"github.com/dop251/goja"
 	"github.com/grafana/xk6-browser/api"
 	"github.com/grafana/xk6-browser/chromium"
 	"github.com/grafana/xk6-browser/common"
+	"github.com/grafana/xk6-browser/k6ext"
+
 	k6common "go.k6.io/k6/js/common"
 	k6modules "go.k6.io/k6/js/modules"
+
+	"github.com/dop251/goja"
 )
 
-const version = "v0.1.1"
+const version = "v0.4.0"
 
 type (
 	// RootModule is the global module instance that will create module
 	// instances for each VU.
 	RootModule struct{}
 
-	// JSModule is the entrypoint into the browser JS module
+	// JSModule is the entrypoint into the browser JS module.
 	JSModule struct {
-		vu      k6modules.VU
-		Devices map[string]common.Device
-		Version string
+		vu        k6modules.VU
+		k6Metrics *k6ext.CustomMetrics
+		Devices   map[string]common.Device
+		Version   string
 	}
 
 	// ModuleInstance represents an instance of the JS module.
@@ -64,11 +68,13 @@ func New() *RootModule {
 // NewModuleInstance implements the k6modules.Module interface to return
 // a new instance for each VU.
 func (*RootModule) NewModuleInstance(vu k6modules.VU) k6modules.Instance {
+	k6m := k6ext.RegisterCustomMetrics(vu.InitEnv().Registry)
 	return &ModuleInstance{
 		mod: &JSModule{
-			vu:      vu,
-			Devices: common.GetDevices(),
-			Version: version,
+			vu:        vu,
+			k6Metrics: k6m,
+			Devices:   common.GetDevices(),
+			Version:   version,
 		},
 	}
 }
@@ -90,8 +96,11 @@ func (m *JSModule) Launch(browserName string, opts goja.Value) api.Browser {
 		<-ctx.Done()
 	}()*/
 
+	ctx := k6ext.WithVU(m.vu.Context(), m.vu)
+	ctx = k6ext.WithCustomMetrics(ctx, m.k6Metrics)
+
 	if browserName == "chromium" {
-		bt := chromium.NewBrowserType(m.vu.Context())
+		bt := chromium.NewBrowserType(ctx)
 		return bt.Launch(opts)
 	}
 

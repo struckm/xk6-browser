@@ -22,11 +22,13 @@ package common
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/dop251/goja"
-	k6common "go.k6.io/k6/js/common"
+
+	"github.com/grafana/xk6-browser/k6ext"
 )
 
 type ProxyOptions struct {
@@ -36,7 +38,7 @@ type ProxyOptions struct {
 	Password string
 }
 
-// LaunchOptions stores browser launch options
+// LaunchOptions stores browser launch options.
 type LaunchOptions struct {
 	Args              []string
 	Debug             bool
@@ -51,7 +53,7 @@ type LaunchOptions struct {
 	Timeout           time.Duration
 }
 
-// LaunchPersistentContextOptions stores browser launch options for persistent context
+// LaunchPersistentContextOptions stores browser launch options for persistent context.
 type LaunchPersistentContextOptions struct {
 	LaunchOptions
 	BrowserContextOptions
@@ -59,16 +61,9 @@ type LaunchPersistentContextOptions struct {
 
 func NewLaunchOptions() *LaunchOptions {
 	launchOpts := LaunchOptions{
-		Args:              make([]string, 0),
-		Debug:             false,
-		Devtools:          false,
 		Env:               make(map[string]string),
-		ExecutablePath:    "",
 		Headless:          true,
-		IgnoreDefaultArgs: make([]string, 0),
 		LogCategoryFilter: ".*",
-		Proxy:             ProxyOptions{},
-		SlowMo:            0.0,
 		Timeout:           DefaultTimeout,
 	}
 	return &launchOpts
@@ -76,17 +71,17 @@ func NewLaunchOptions() *LaunchOptions {
 
 // Parse parses launch options from a JS object.
 func (l *LaunchOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
 			switch k {
 			case "args":
 				v := opts.Get(k)
-				switch v.ExportType() {
-				case reflect.TypeOf(goja.Object{}):
-					args := v.Export().([]string)
-					l.Args = append(l.Args, args...)
+				if args, ok := v.Export().([]interface{}); ok {
+					for _, argv := range args {
+						l.Args = append(l.Args, fmt.Sprintf("%v", argv))
+					}
 				}
 			case "debug":
 				l.Debug = opts.Get(k).ToBoolean()

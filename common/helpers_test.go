@@ -32,11 +32,13 @@ import (
 	"github.com/dop251/goja"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
+
+	"github.com/grafana/xk6-browser/log"
 )
 
 func newExecCtx() (*ExecutionContext, context.Context, *goja.Runtime) {
 	ctx := context.Background()
-	logger := NewLogger(ctx, logrus.New(), false, nil)
+	logger := log.New(logrus.New(), false, nil)
 	execCtx := NewExecutionContext(ctx, nil, nil, runtime.ExecutionContextID(123456789), logger)
 
 	return execCtx, ctx, goja.New()
@@ -143,9 +145,11 @@ func TestConvertArgument(t *testing.T) {
 
 	t.Run("*BaseJSHandle", func(t *testing.T) {
 		execCtx, ctx, rt := newExecCtx()
-		timeoutSetings := NewTimeoutSettings(nil)
-		frameManager := NewFrameManager(ctx, nil, nil, timeoutSetings, NewLogger(ctx, NullLogger(), false, nil))
-		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"))
+		log := log.NewNullLogger()
+
+		timeoutSettings := NewTimeoutSettings(nil)
+		frameManager := NewFrameManager(ctx, nil, nil, timeoutSettings, log)
+		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"), log)
 		remoteObjValue := "hellow world"
 		result, _ := json.Marshal(remoteObjValue)
 		remoteObject := &runtime.RemoteObject{
@@ -164,9 +168,11 @@ func TestConvertArgument(t *testing.T) {
 
 	t.Run("*BaseJSHandle wrong context", func(t *testing.T) {
 		execCtx, ctx, rt := newExecCtx()
-		timeoutSetings := NewTimeoutSettings(nil)
-		frameManager := NewFrameManager(ctx, nil, nil, timeoutSetings, NewLogger(ctx, NullLogger(), false, nil))
-		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"))
+		log := log.NewNullLogger()
+
+		timeoutSettings := NewTimeoutSettings(nil)
+		frameManager := NewFrameManager(ctx, nil, nil, timeoutSettings, log)
+		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"), log)
 		remoteObjectID := runtime.RemoteObjectID("object_id_0123456789")
 		remoteObject := &runtime.RemoteObject{
 			Type:     "object",
@@ -184,9 +190,11 @@ func TestConvertArgument(t *testing.T) {
 
 	t.Run("*BaseJSHandle is disposed", func(t *testing.T) {
 		execCtx, ctx, rt := newExecCtx()
-		timeoutSetings := NewTimeoutSettings(nil)
-		frameManager := NewFrameManager(ctx, nil, nil, timeoutSetings, NewLogger(ctx, NullLogger(), false, nil))
-		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"))
+		log := log.NewNullLogger()
+
+		timeoutSettings := NewTimeoutSettings(nil)
+		frameManager := NewFrameManager(ctx, nil, nil, timeoutSettings, log)
+		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"), log)
 		remoteObjectID := runtime.RemoteObjectID("object_id_0123456789")
 		remoteObject := &runtime.RemoteObject{
 			Type:     "object",
@@ -204,9 +212,11 @@ func TestConvertArgument(t *testing.T) {
 
 	t.Run("*BaseJSHandle as *ElementHandle", func(t *testing.T) {
 		execCtx, ctx, rt := newExecCtx()
-		timeoutSetings := NewTimeoutSettings(nil)
-		frameManager := NewFrameManager(ctx, nil, nil, timeoutSetings, NewLogger(ctx, NullLogger(), false, nil))
-		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"))
+		log := log.NewNullLogger()
+
+		timeoutSettings := NewTimeoutSettings(nil)
+		frameManager := NewFrameManager(ctx, nil, nil, timeoutSettings, log)
+		frame := NewFrame(ctx, frameManager, nil, cdp.FrameID("frame_id_0123456789"), log)
 		remoteObjectID := runtime.RemoteObjectID("object_id_0123456789")
 		remoteObject := &runtime.RemoteObject{
 			Type:     "object",

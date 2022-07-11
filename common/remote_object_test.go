@@ -21,54 +21,51 @@
 package common
 
 import (
-	"context"
 	"encoding/json"
 	"math"
 	"testing"
+
+	"github.com/grafana/xk6-browser/k6ext/k6test"
 
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/dop251/goja"
 	"github.com/mailru/easyjson"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	k6common "go.k6.io/k6/js/common"
 )
 
 func TestValueFromRemoteObject(t *testing.T) {
 	t.Parallel()
 
 	t.Run("unserializable value error", func(t *testing.T) {
-		rt := goja.New()
-		ctx := k6common.WithRuntime(context.Background(), rt)
+		vu := k6test.NewVU(t)
 		unserializableValue := runtime.UnserializableValue("a string instead")
 		remoteObject := &runtime.RemoteObject{
 			Type:                "number",
 			UnserializableValue: unserializableValue,
 		}
 
-		arg, err := valueFromRemoteObject(ctx, remoteObject)
+		arg, err := valueFromRemoteObject(vu.Context(), remoteObject)
 		require.True(t, goja.IsNull(arg))
 		require.ErrorIs(t, UnserializableValueError{unserializableValue}, err)
 	})
 
 	t.Run("bigint parsing error", func(t *testing.T) {
-		rt := goja.New()
-		ctx := k6common.WithRuntime(context.Background(), rt)
+		vu := k6test.NewVU(t)
 		unserializableValue := runtime.UnserializableValue("a string instead")
 		remoteObject := &runtime.RemoteObject{
 			Type:                "bigint",
 			UnserializableValue: unserializableValue,
 		}
 
-		arg, err := valueFromRemoteObject(ctx, remoteObject)
+		arg, err := valueFromRemoteObject(vu.Context(), remoteObject)
 
 		require.True(t, goja.IsNull(arg))
 		assert.ErrorIs(t, UnserializableValueError{unserializableValue}, err)
 	})
 
 	t.Run("float64 unserializable values", func(t *testing.T) {
-		rt := goja.New()
-		ctx := k6common.WithRuntime(context.Background(), rt)
+		vu := k6test.NewVU(t)
 		unserializableValues := []struct {
 			value    string
 			expected float64
@@ -96,7 +93,7 @@ func TestValueFromRemoteObject(t *testing.T) {
 				Type:                "number",
 				UnserializableValue: runtime.UnserializableValue(v.value),
 			}
-			arg, err := valueFromRemoteObject(ctx, remoteObject)
+			arg, err := valueFromRemoteObject(vu.Context(), remoteObject)
 			require.NoError(t, err)
 			require.NotNil(t, arg)
 			if v.value == "NaN" {
@@ -108,9 +105,6 @@ func TestValueFromRemoteObject(t *testing.T) {
 	})
 
 	t.Run("primitive types", func(t *testing.T) {
-		rt := goja.New()
-		ctx := k6common.WithRuntime(context.Background(), rt)
-
 		primitiveTypes := []struct {
 			typ   runtime.Type
 			value interface{}
@@ -138,6 +132,7 @@ func TestValueFromRemoteObject(t *testing.T) {
 			},
 		}
 
+		vu := k6test.NewVU(t)
 		for _, p := range primitiveTypes {
 			marshalled, _ := json.Marshal(p.value)
 			remoteObject := &runtime.RemoteObject{
@@ -145,7 +140,7 @@ func TestValueFromRemoteObject(t *testing.T) {
 				Value: marshalled,
 			}
 
-			arg, err := valueFromRemoteObject(ctx, remoteObject)
+			arg, err := valueFromRemoteObject(vu.Context(), remoteObject)
 
 			require.Nil(t, err)
 			require.Equal(t, p.value, p.toFn(arg))
@@ -153,8 +148,6 @@ func TestValueFromRemoteObject(t *testing.T) {
 	})
 
 	t.Run("remote object with ID", func(t *testing.T) {
-		rt := goja.New()
-		ctx := k6common.WithRuntime(context.Background(), rt)
 		remoteObjectID := runtime.RemoteObjectID("object_id_0123456789")
 		remoteObject := &runtime.RemoteObject{
 			Type:     "object",
@@ -167,11 +160,11 @@ func TestValueFromRemoteObject(t *testing.T) {
 			},
 		}
 
-		val, err := valueFromRemoteObject(ctx, remoteObject)
+		vu := k6test.NewVU(t)
+		val, err := valueFromRemoteObject(vu.Context(), remoteObject)
 		require.NoError(t, err)
-		assert.Equal(t, rt.ToValue(map[string]interface{}{"num": float64(1)}), val)
+		assert.Equal(t, vu.ToGojaValue(map[string]interface{}{"num": float64(1)}), val)
 	})
-
 }
 
 func TestParseRemoteObject(t *testing.T) {
@@ -237,7 +230,7 @@ func TestParseRemoteObject(t *testing.T) {
 				},
 			},
 			expected: map[string]interface{}{},
-			expErr:   "failed parsing object property",
+			expErr:   "parsing object property",
 		},
 	}
 

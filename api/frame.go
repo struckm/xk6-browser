@@ -1,28 +1,8 @@
-/*
- *
- * xk6-browser - a browser automation extension for k6
- * Copyright (C) 2021 Load Impact
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
- */
-
 package api
 
 import "github.com/dop251/goja"
 
-// Frame is the interface of a CDP target frame
+// Frame is the interface of a CDP target frame.
 type Frame interface {
 	AddScriptTag(opts goja.Value)
 	AddStyleTag(opts goja.Value)
@@ -52,6 +32,8 @@ type Frame interface {
 	IsVisible(selector string, opts goja.Value) bool
 	ID() string
 	LoaderID() string
+	// Locator creates and returns a new locator for this frame.
+	Locator(selector string, opts goja.Value) Locator
 	Name() string
 	Query(selector string) ElementHandle
 	QueryAll(selector string) []ElementHandle
@@ -67,7 +49,7 @@ type Frame interface {
 	Type(selector string, text string, opts goja.Value)
 	Uncheck(selector string, opts goja.Value)
 	URL() string
-	WaitForFunction(pageFunc goja.Value, opts goja.Value, args ...goja.Value) JSHandle
+	WaitForFunction(pageFunc, opts goja.Value, args ...goja.Value) *goja.Promise
 	WaitForLoadState(state string, opts goja.Value)
 	WaitForNavigation(opts goja.Value) Response
 	WaitForSelector(selector string, opts goja.Value) ElementHandle

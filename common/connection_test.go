@@ -26,25 +26,26 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/grafana/xk6-browser/log"
+	"github.com/grafana/xk6-browser/tests/ws"
+
 	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/gorilla/websocket"
-	"github.com/grafana/xk6-browser/testutils"
 	"github.com/mailru/easyjson"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestConnection(t *testing.T) {
-	server := testutils.NewWSTestServerWithEcho(t)
-	defer server.Cleanup()
+	server := ws.NewServer(t, ws.WithEchoHandler("/echo"))
 
 	t.Run("connect", func(t *testing.T) {
 		ctx := context.Background()
 		url, _ := url.Parse(server.ServerHTTP.URL)
 		wsURL := fmt.Sprintf("ws://%s/echo", url.Host)
-		conn, err := NewConnection(ctx, wsURL, NewLogger(ctx, NullLogger(), false, nil))
+		conn, err := NewConnection(ctx, wsURL, log.NewNullLogger())
 		conn.Close()
 
 		require.NoError(t, err)
@@ -52,14 +53,13 @@ func TestConnection(t *testing.T) {
 }
 
 func TestConnectionClosureAbnormal(t *testing.T) {
-	server := testutils.NewWSTestServerWithClosureAbnormal(t)
-	defer server.Cleanup()
+	server := ws.NewServer(t, ws.WithClosureAbnormalHandler("/closure-abnormal"))
 
 	t.Run("closure abnormal", func(t *testing.T) {
 		ctx := context.Background()
 		url, _ := url.Parse(server.ServerHTTP.URL)
 		wsURL := fmt.Sprintf("ws://%s/closure-abnormal", url.Host)
-		conn, err := NewConnection(ctx, wsURL, NewLogger(ctx, NullLogger(), false, nil))
+		conn, err := NewConnection(ctx, wsURL, log.NewNullLogger())
 
 		if assert.NoError(t, err) {
 			action := target.SetDiscoverTargets(true)
@@ -70,14 +70,13 @@ func TestConnectionClosureAbnormal(t *testing.T) {
 }
 
 func TestConnectionSendRecv(t *testing.T) {
-	server := testutils.NewWSTestServerWithCDPHandler(t, testutils.CDPDefaultHandler, nil)
-	defer server.Cleanup()
+	server := ws.NewServer(t, ws.WithCDPHandler("/cdp", ws.CDPDefaultHandler, nil))
 
 	t.Run("send command with empty reply", func(t *testing.T) {
 		ctx := context.Background()
 		url, _ := url.Parse(server.ServerHTTP.URL)
 		wsURL := fmt.Sprintf("ws://%s/cdp", url.Host)
-		conn, err := NewConnection(ctx, wsURL, NewLogger(ctx, NullLogger(), false, nil))
+		conn, err := NewConnection(ctx, wsURL, log.NewNullLogger())
 
 		if assert.NoError(t, err) {
 			action := target.SetDiscoverTargets(true)
@@ -110,19 +109,19 @@ func TestConnectionCreateSession(t *testing.T) {
 					writeCh <- cdproto.Message{
 						Method: cdproto.EventTargetAttachedToTarget,
 						Params: easyjson.RawMessage([]byte(`
-                            {
-                                "sessionId": "0123456789",
-                                "targetInfo": {
-                                    "targetId": "abcdef0123456789",
-                                    "type": "page",
-                                    "title": "",
-                                    "url": "about:blank",
-                                    "attached": true,
-                                    "browserContextId": "0123456789876543210"
-                                },
-                                "waitingForDebugger": false
-                            }
-                        `)),
+						{
+							"sessionId": "0123456789",
+							"targetInfo": {
+								"targetId": "abcdef0123456789",
+								"type": "page",
+								"title": "",
+								"url": "about:blank",
+								"attached": true,
+								"browserContextId": "0123456789876543210"
+							},
+							"waitingForDebugger": false
+						}
+						`)),
 					}
 					writeCh <- cdproto.Message{
 						ID:        msg.ID,
@@ -134,14 +133,13 @@ func TestConnectionCreateSession(t *testing.T) {
 		}
 	}
 
-	server := testutils.NewWSTestServerWithCDPHandler(t, handler, &cmdsReceived)
-	defer server.Cleanup()
+	server := ws.NewServer(t, ws.WithCDPHandler("/cdp", handler, &cmdsReceived))
 
 	t.Run("create session for target", func(t *testing.T) {
 		ctx := context.Background()
 		url, _ := url.Parse(server.ServerHTTP.URL)
 		wsURL := fmt.Sprintf("ws://%s/cdp", url.Host)
-		conn, err := NewConnection(ctx, wsURL, NewLogger(ctx, NullLogger(), false, nil))
+		conn, err := NewConnection(ctx, wsURL, log.NewNullLogger())
 
 		if assert.NoError(t, err) {
 			session, err := conn.createSession(&target.Info{

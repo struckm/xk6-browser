@@ -22,198 +22,325 @@ package common
 
 import (
 	"context"
+	_ "embed"
+	"errors"
 	"fmt"
 	"regexp"
 
+	"github.com/grafana/xk6-browser/api"
+	"github.com/grafana/xk6-browser/k6ext"
+	"github.com/grafana/xk6-browser/log"
+
+	k6modules "go.k6.io/k6/js/modules"
+
+	"github.com/chromedp/cdproto"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/runtime"
+	"github.com/chromedp/cdproto/target"
 	"github.com/dop251/goja"
-	"github.com/grafana/xk6-browser/api"
-	k6common "go.k6.io/k6/js/common"
 )
 
 const evaluationScriptURL = "__xk6_browser_evaluation_script__"
 
-var /* const */ sourceURLRegex = regexp.MustCompile(`^(?s)[\040\t]*//[@#] sourceURL=\s*(\S*?)\s*$`)
+var sourceURLRegex = regexp.MustCompile(`^(?s)[\040\t]*//[@#] sourceURL=\s*(\S*?)\s*$`)
 
-// ExecutionContext represents a JS execution context
+type executionWorld string
+
+const (
+	mainWorld    executionWorld = "main"
+	utilityWorld executionWorld = "utility"
+)
+
+func (ew executionWorld) valid() bool {
+	return ew == mainWorld || ew == utilityWorld
+}
+
+type evalOptions struct {
+	forceCallable, returnByValue bool
+}
+
+func (ea evalOptions) String() string {
+	return fmt.Sprintf("forceCallable:%t returnByValue:%t", ea.forceCallable, ea.returnByValue)
+}
+
+// ExecutionContext represents a JS execution context.
 type ExecutionContext struct {
 	ctx            context.Context
-	logger         *Logger
-	session        *Session
+	logger         *log.Logger
+	session        session
 	frame          *Frame
 	id             runtime.ExecutionContextID
 	injectedScript api.JSHandle
+	vu             k6modules.VU
+
+	// Used for logging
+	sid  target.SessionID // Session ID
+	stid cdp.FrameID      // Session TargetID
+	fid  cdp.FrameID      // Frame ID
+	furl string           // Frame URL
 }
 
-// NewExecutionContext creates a new JS execution context
+// NewExecutionContext creates a new JS execution context.
 func NewExecutionContext(
-	ctx context.Context, session *Session, frame *Frame,
-	id runtime.ExecutionContextID, logger *Logger,
+	ctx context.Context, s session, f *Frame, id runtime.ExecutionContextID, l *log.Logger,
 ) *ExecutionContext {
-	return &ExecutionContext{
+	e := &ExecutionContext{
 		ctx:            ctx,
-		session:        session,
-		frame:          frame,
+		session:        s,
+		frame:          f,
 		id:             id,
 		injectedScript: nil,
-		logger:         logger,
+		vu:             k6ext.GetVU(ctx),
+		logger:         l,
 	}
+	if s != nil {
+		e.sid = s.ID()
+		e.stid = cdp.FrameID(s.TargetID())
+	}
+	if f != nil {
+		e.fid = cdp.FrameID(f.ID())
+		e.furl = f.URL()
+	}
+	l.Debugf(
+		"NewExecutionContext",
+		"sid:%s stid:%s fid:%s ectxid:%d furl:%q",
+		e.sid, e.stid, e.fid, id, e.furl)
+
+	return e
 }
 
-// Adopts specified backend node into this execution context from another execution context
-func (e *ExecutionContext) adoptBackendNodeId(backendNodeID cdp.BackendNodeID) (*ElementHandle, error) {
-	var remoteObj *runtime.RemoteObject
-	var err error
+// Adopts specified backend node into this execution context from another execution context.
+func (e *ExecutionContext) adoptBackendNodeID(backendNodeID cdp.BackendNodeID) (*ElementHandle, error) {
+	e.logger.Debugf(
+		"ExecutionContext:adoptBackendNodeID",
+		"sid:%s stid:%s fid:%s ectxid:%d furl:%q bnid:%d",
+		e.sid, e.stid, e.fid, e.id, e.furl, backendNodeID)
+
+	var (
+		remoteObj *runtime.RemoteObject
+		err       error
+	)
 
 	action := dom.ResolveNode().
 		WithBackendNodeID(backendNodeID).
 		WithExecutionContextID(e.id)
+
 	if remoteObj, err = action.Do(cdp.WithExecutor(e.ctx, e.session)); err != nil {
-		return nil, fmt.Errorf("unable to get DOM node: %w", err)
+		return nil, fmt.Errorf("resolving DOM node: %w", err)
 	}
 
 	return NewJSHandle(e.ctx, e.session, e, e.frame, remoteObj, e.logger).AsElement().(*ElementHandle), nil
 }
 
-// Adopts the specified element handle into this execution context from another execution context
-func (e *ExecutionContext) adoptElementHandle(elementHandle *ElementHandle) (*ElementHandle, error) {
-	if elementHandle.execCtx == e {
-		panic("Cannot adopt handle that already belongs to this execution context")
+// Adopts the specified element handle into this execution context from another execution context.
+func (e *ExecutionContext) adoptElementHandle(eh *ElementHandle) (*ElementHandle, error) {
+	var (
+		efid cdp.FrameID
+		esid target.SessionID
+	)
+	if eh.frame != nil {
+		efid = cdp.FrameID(eh.frame.ID())
+	}
+	if eh.session != nil {
+		esid = eh.session.ID()
+	}
+	e.logger.Debugf(
+		"ExecutionContext:adoptElementHandle",
+		"sid:%s stid:%s fid:%s ectxid:%d furl:%q ehtid:%s ehsid:%s",
+		e.sid, e.stid, e.fid, e.id, e.furl,
+		efid, esid)
+
+	if eh.execCtx == e {
+		panic("cannot adopt handle that already belongs to this execution context")
 	}
 	if e.frame == nil {
-		panic("Cannot adopt handle without frame owner")
+		panic("cannot adopt handle without frame owner")
 	}
 
 	var node *cdp.Node
 	var err error
 
-	action := dom.DescribeNode().WithObjectID(elementHandle.remoteObject.ObjectID)
+	action := dom.DescribeNode().WithObjectID(eh.remoteObject.ObjectID)
 	if node, err = action.Do(cdp.WithExecutor(e.ctx, e.session)); err != nil {
-		return nil, fmt.Errorf("unable to get DOM node: %w", err)
+		return nil, fmt.Errorf("describing DOM node: %w", err)
 	}
 
-	return e.adoptBackendNodeId(node.BackendNodeID)
+	return e.adoptBackendNodeID(node.BackendNodeID)
 }
 
-// evaluate will evaluate provided callable within this execution context and return by value or handle
-func (e *ExecutionContext) evaluate(apiCtx context.Context, forceCallable bool, returnByValue bool, pageFunc goja.Value, args ...goja.Value) (res interface{}, err error) {
+// eval evaluates the provided JavaScript within this execution context and
+// returns a value or handle.
+func (e *ExecutionContext) eval(
+	apiCtx context.Context, opts evalOptions, js string, args ...interface{},
+) (interface{}, error) {
+	e.logger.Debugf(
+		"ExecutionContext:eval",
+		"sid:%s stid:%s fid:%s ectxid:%d furl:%q %s",
+		e.sid, e.stid, e.fid, e.id, e.furl, opts)
+
 	suffix := `//# sourceURL=` + evaluationScriptURL
 
-	isCallable := forceCallable
-	if !forceCallable {
-		_, isCallable = goja.AssertFunction(pageFunc.(goja.Value))
+	var action interface {
+		Do(context.Context) (*runtime.RemoteObject, *runtime.ExceptionDetails, error)
 	}
 
-	if !isCallable {
-		expression := pageFunc.ToString().String()
-		expressionWithSourceURL := expression
-		if !sourceURLRegex.Match([]byte(expression)) {
-			expressionWithSourceURL = expression + "\n" + suffix
+	if !opts.forceCallable {
+		if !sourceURLRegex.Match([]byte(js)) {
+			js += "\n" + suffix
 		}
 
-		var remoteObject *runtime.RemoteObject
-		var exceptionDetails *runtime.ExceptionDetails
-		action := runtime.Evaluate(expressionWithSourceURL).
+		action = runtime.Evaluate(js).
 			WithContextID(e.id).
-			WithReturnByValue(returnByValue).
+			WithReturnByValue(opts.returnByValue).
 			WithAwaitPromise(true).
 			WithUserGesture(true)
-		if remoteObject, exceptionDetails, err = action.Do(cdp.WithExecutor(apiCtx, e.session)); err != nil {
-			return nil, fmt.Errorf("unable to evaluate expression: %w", err)
-		}
-		if exceptionDetails != nil {
-			return nil, fmt.Errorf("unable to evaluate expression: %w", exceptionDetails)
-		}
-		if remoteObject != nil {
-			if returnByValue {
-				res, err = valueFromRemoteObject(apiCtx, remoteObject)
-				if err != nil {
-					return nil, fmt.Errorf("unable to extract value from remote object: %w", err)
-				}
-			} else if remoteObject.ObjectID != "" {
-				// Note: we don't use the passed in apiCtx here as it could be tied to a timeout
-				res = NewJSHandle(e.ctx, e.session, e, e.frame, remoteObject, e.logger)
-			}
-		}
 	} else {
-		functionText := pageFunc.ToString().String()
 		var arguments []*runtime.CallArgument
 		for _, arg := range args {
 			result, err := convertArgument(apiCtx, e, arg)
 			if err != nil {
-				return nil, fmt.Errorf("unable to convert argument: %w", err)
+				return nil, fmt.Errorf("converting argument %q "+
+					"in execution context ID %d and frame ID %v: %w",
+					arg, e.id, e.Frame().ID(), err)
 			}
 			arguments = append(arguments, result)
 		}
 
-		var remoteObject *runtime.RemoteObject
-		var exceptionDetails *runtime.ExceptionDetails
-		action := runtime.CallFunctionOn(functionText + "\n" + suffix + "\n").
+		js += "\n" + suffix + "\n"
+		action = runtime.CallFunctionOn(js).
 			WithArguments(arguments).
 			WithExecutionContextID(e.id).
-			WithReturnByValue(returnByValue).
+			WithReturnByValue(opts.returnByValue).
 			WithAwaitPromise(true).
 			WithUserGesture(true)
-		if remoteObject, exceptionDetails, err = action.Do(cdp.WithExecutor(apiCtx, e.session)); err != nil {
-			return nil, fmt.Errorf("unable to evaluate expression: %w", err)
-		}
-		if exceptionDetails != nil {
-			return nil, fmt.Errorf("unable to evaluate expression: %w", exceptionDetails)
-		}
-		if remoteObject != nil {
-			if returnByValue {
-				res, err = valueFromRemoteObject(apiCtx, remoteObject)
-				if err != nil {
-					return nil, fmt.Errorf("unable to extract value from remote object: %w", err)
-				}
-			} else if remoteObject.ObjectID != "" {
-				// Note: we don't use the passed in apiCtx here as it could be tied to a timeout
-				res = NewJSHandle(e.ctx, e.session, e, e.frame, remoteObject, e.logger)
-			}
-		}
 	}
 
-	return res, err
+	var (
+		remoteObject     *runtime.RemoteObject
+		exceptionDetails *runtime.ExceptionDetails
+		err              error
+	)
+	if remoteObject, exceptionDetails, err = action.Do(cdp.WithExecutor(apiCtx, e.session)); err != nil {
+		var cdpe *cdproto.Error
+		if errors.As(err, &cdpe) && cdpe.Code == -32000 {
+			err = fmt.Errorf("execution context with ID %d not found", e.id)
+		}
+		return nil, err
+	}
+	if exceptionDetails != nil {
+		return nil, fmt.Errorf("%s", parseExceptionDetails(exceptionDetails))
+	}
+	var res interface{}
+	if remoteObject == nil {
+		e.logger.Debugf(
+			"ExecutionContext:eval",
+			"sid:%s stid:%s fid:%s ectxid:%d furl:%q remoteObject is nil",
+			e.sid, e.stid, e.fid, e.id, e.furl)
+		return res, nil
+	}
+
+	if opts.returnByValue {
+		res, err = valueFromRemoteObject(apiCtx, remoteObject)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"extracting value from remote object with ID %s: %w",
+				remoteObject.ObjectID, err)
+		}
+	} else if remoteObject.ObjectID != "" {
+		// Note: we don't use the passed in apiCtx here as it could be tied to a timeout
+		res = NewJSHandle(e.ctx, e.session, e, e.frame, remoteObject, e.logger)
+	}
+
+	return res, nil
 }
 
-// getInjectedScript returns a JS handle to the injected script of helper functions
-func (e *ExecutionContext) getInjectedScript(apiCtx context.Context) (api.JSHandle, error) {
-	if e.injectedScript == nil {
-		rt := k6common.GetRuntime(e.ctx)
-		suffix := `//# sourceURL=` + evaluationScriptURL
-		source := fmt.Sprintf(`(() => {%s; return new InjectedScript();})()`, injectedScriptSource)
-		expression := source
-		expressionWithSourceURL := expression
-		if !sourceURLRegex.Match([]byte(expression)) {
-			expressionWithSourceURL = expression + "\n" + suffix
-		}
+// Based on: https://github.com/microsoft/playwright/blob/master/src/server/injected/injectedScript.ts
+//go:embed js/injected_script.js
+var injectedScriptSource string
 
-		handle, err := e.evaluate(apiCtx, false, false, rt.ToValue(expressionWithSourceURL))
-		if handle == nil || err != nil {
-			return nil, err
-		}
-		e.injectedScript = handle.(api.JSHandle)
+// getInjectedScript returns a JS handle to the injected script of helper functions.
+func (e *ExecutionContext) getInjectedScript(apiCtx context.Context) (api.JSHandle, error) {
+	e.logger.Debugf(
+		"ExecutionContext:getInjectedScript",
+		"sid:%s stid:%s fid:%s ectxid:%d efurl:%s",
+		e.sid, e.stid, e.fid, e.id, e.furl)
+
+	if e.injectedScript != nil {
+		return e.injectedScript, nil
 	}
+
+	var (
+		suffix                  = `//# sourceURL=` + evaluationScriptURL
+		source                  = fmt.Sprintf(`(() => {%s; return new InjectedScript();})()`, injectedScriptSource)
+		expression              = source
+		expressionWithSourceURL = expression
+	)
+	if !sourceURLRegex.Match([]byte(expression)) {
+		expressionWithSourceURL = expression + "\n" + suffix
+	}
+	handle, err := e.eval(
+		apiCtx,
+		evalOptions{forceCallable: false, returnByValue: false},
+		expressionWithSourceURL,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if handle == nil {
+		return nil, errors.New("handle is nil")
+	}
+	injectedScript, ok := handle.(api.JSHandle)
+	if !ok {
+		return nil, ErrJSHandleInvalid
+	}
+	e.injectedScript = injectedScript
+
 	return e.injectedScript, nil
 }
 
-// Evaluate will evaluate provided page function within this execution context
-func (e *ExecutionContext) Evaluate(apiCtx context.Context, pageFunc goja.Value, args ...goja.Value) (interface{}, error) {
-	return e.evaluate(apiCtx, true, true, pageFunc, args...)
+// Eval evaluates the provided JavaScript within this execution context and
+// returns a value or handle.
+func (e *ExecutionContext) Eval(
+	apiCtx context.Context, js goja.Value, args ...goja.Value,
+) (interface{}, error) {
+	opts := evalOptions{
+		forceCallable: true,
+		returnByValue: true,
+	}
+	evalArgs := make([]interface{}, 0, len(args))
+	for _, a := range args {
+		evalArgs = append(evalArgs, a.Export())
+	}
+	return e.eval(apiCtx, opts, js.ToString().String(), evalArgs...)
 }
 
-// EvaluateHandle will evaluate provided page function within this execution context
-func (e *ExecutionContext) EvaluateHandle(apiCtx context.Context, pageFunc goja.Value, args ...goja.Value) (api.JSHandle, error) {
-	res, err := e.evaluate(apiCtx, true, false, pageFunc, args...)
+// EvalHandle evaluates the provided JavaScript within this execution context
+// and returns a JSHandle.
+func (e *ExecutionContext) EvalHandle(
+	apiCtx context.Context, js goja.Value, args ...goja.Value,
+) (api.JSHandle, error) {
+	opts := evalOptions{
+		forceCallable: true,
+		returnByValue: false,
+	}
+	evalArgs := make([]interface{}, 0, len(args))
+	for _, a := range args {
+		evalArgs = append(evalArgs, a.Export())
+	}
+	res, err := e.eval(apiCtx, opts, js.ToString().String(), evalArgs...)
 	if err != nil {
 		return nil, err
 	}
 	return res.(api.JSHandle), nil
 }
 
-// Frame returns the frame that this execution context belongs to
+// Frame returns the frame that this execution context belongs to.
 func (e *ExecutionContext) Frame() *Frame {
 	return e.frame
+}
+
+// ID returns the CDP runtime ID of this execution context.
+func (e *ExecutionContext) ID() runtime.ExecutionContextID {
+	return e.id
 }

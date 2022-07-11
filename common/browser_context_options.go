@@ -22,12 +22,14 @@ package common
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/grafana/xk6-browser/k6ext"
 
 	"github.com/dop251/goja"
-	k6common "go.k6.io/k6/js/common"
 )
 
-// BrowserContextOptions stores browser context options
+// BrowserContextOptions stores browser context options.
 type BrowserContextOptions struct {
 	AcceptDownloads   bool              `js:"acceptDownloads"`
 	BypassCSP         bool              `js:"bypassCSP"`
@@ -51,33 +53,23 @@ type BrowserContextOptions struct {
 	Viewport          *Viewport         `js:"viewport"`
 }
 
-// NewBrowserContextOptions creates a default set of browser context options
+// NewBrowserContextOptions creates a default set of browser context options.
 func NewBrowserContextOptions() *BrowserContextOptions {
 	return &BrowserContextOptions{
-		AcceptDownloads:   false,
-		BypassCSP:         false,
 		ColorScheme:       ColorSchemeLight,
 		DeviceScaleFactor: 1.0,
 		ExtraHTTPHeaders:  make(map[string]string),
-		Geolocation:       nil,
-		HasTouch:          false,
-		HttpCredentials:   nil,
-		IgnoreHTTPSErrors: false,
-		IsMobile:          false,
 		JavaScriptEnabled: true,
 		Locale:            DefaultLocale,
-		Offline:           false,
-		Permissions:       make([]string, 0),
+		Permissions:       []string{},
 		ReducedMotion:     ReducedMotionNoPreference,
 		Screen:            &Screen{Width: DefaultScreenWidth, Height: DefaultScreenHeight},
-		TimezoneID:        "",
-		UserAgent:         "",
 		Viewport:          &Viewport{Width: DefaultScreenWidth, Height: DefaultScreenHeight},
 	}
 }
 
 func (b *BrowserContextOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -127,8 +119,11 @@ func (b *BrowserContextOptions) Parse(ctx context.Context, opts goja.Value) erro
 			case "offline":
 				b.Offline = opts.Get(k).ToBoolean()
 			case "permissions":
-				permissions := opts.Get(k).Export().([]string)
-				b.Permissions = append(b.Permissions, permissions...)
+				if ps, ok := opts.Get(k).Export().([]interface{}); ok {
+					for _, p := range ps {
+						b.Permissions = append(b.Permissions, fmt.Sprintf("%v", p))
+					}
+				}
 			case "reducedMotion":
 				switch ReducedMotion(opts.Get(k).String()) {
 				case "reduce":

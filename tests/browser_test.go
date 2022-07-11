@@ -21,33 +21,21 @@
 package tests
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/grafana/xk6-browser/api"
-	"github.com/grafana/xk6-browser/testutils/browsertest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-var browserModuleTests = map[string]func(*testing.T, api.Browser){
-	"NewPage":   testBrowserNewPage,
-	"Version":   testBrowserVersion,
-	"UserAgent": testBrowserUserAgent,
-}
-
-func TestBrowserModule(t *testing.T) {
-	bt := browsertest.NewBrowserTest(t)
-	t.Cleanup(bt.Browser.Close)
-
-	for name, test := range browserModuleTests {
-		t.Run(name, func(t *testing.T) {
-			test(t, bt.Browser)
-		})
-	}
-}
-
-func testBrowserNewPage(t *testing.T, b api.Browser) {
+func TestBrowserNewPage(t *testing.T) {
+	b := newTestBrowser(t)
 	p := b.NewPage(nil)
 	l := len(b.Contexts())
 	assert.Equal(t, 1, l, "expected there to be 1 browser context, but found %d", l)
@@ -64,18 +52,115 @@ func testBrowserNewPage(t *testing.T, b api.Browser) {
 	assert.Equal(t, 0, l, "expected there to be 0 browser context after second page close, but found %d", l)
 }
 
+func TestTmpDirCleanup(t *testing.T) {
+	tmpDirPath := "./"
+
+	err := os.Setenv("TMPDIR", tmpDirPath)
+	assert.NoError(t, err)
+	defer func() {
+		err = os.Unsetenv("TMPDIR")
+		assert.NoError(t, err)
+	}()
+
+	b := newTestBrowser(t, withSkipClose())
+	p := b.NewPage(nil)
+	p.Close(nil)
+
+	matches, err := filepath.Glob(tmpDirPath + "xk6-browser-data-*")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, matches, "a dir should exist that matches the pattern `xk6-browser-data-*`")
+
+	b.Close()
+
+	matches, err = filepath.Glob(tmpDirPath + "xk6-browser-data-*")
+	assert.NoError(t, err)
+	assert.Empty(t, matches, "a dir shouldn't exist which matches the pattern `xk6-browser-data-*`")
+}
+
+func TestBrowserOn(t *testing.T) {
+	t.Parallel()
+
+	script := `
+		b.on('%s').then((val) => {
+			log('ok: '+val);
+		}, (val) => {
+			log('err: '+val);
+		});`
+
+	t.Run("err_wrong_event", func(t *testing.T) {
+		t.Parallel()
+
+		b := newTestBrowser(t)
+		rt := b.vu.Runtime()
+		require.NoError(t, rt.Set("b", b.Browser))
+
+		err := b.vu.Loop.Start(func() error {
+			if _, err := rt.RunString(fmt.Sprintf(script, "wrongevent")); err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			return nil
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(),
+			`unknown browser event: "wrongevent", must be "disconnected"`)
+	})
+
+	t.Run("ok_promise_resolved", func(t *testing.T) {
+		t.Parallel()
+
+		b := newTestBrowser(t, withSkipClose())
+		rt := b.vu.Runtime()
+		require.NoError(t, rt.Set("b", b.Browser))
+		var log []string
+		require.NoError(t, rt.Set("log", func(s string) { log = append(log, s) }))
+
+		err := b.vu.Loop.Start(func() error {
+			time.AfterFunc(100*time.Millisecond, func() { b.Browser.Close() })
+			if _, err := rt.RunString(fmt.Sprintf(script, "disconnected")); err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Contains(t, log, "ok: true")
+	})
+
+	t.Run("ok_promise_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		b := newTestBrowser(t, ctx)
+		rt := b.vu.Runtime()
+		require.NoError(t, rt.Set("b", b.Browser))
+		var log []string
+		require.NoError(t, rt.Set("log", func(s string) { log = append(log, s) }))
+
+		err := b.vu.Loop.Start(func() error {
+			time.AfterFunc(100*time.Millisecond, func() { cancel() })
+			if _, err := rt.RunString(fmt.Sprintf(script, "disconnected")); err != nil {
+				return fmt.Errorf("%w", err)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		assert.Contains(t, log, "err: browser.on promise rejected: context canceled")
+	})
+}
+
 // This only works for Chrome!
-func testBrowserVersion(t *testing.T, b api.Browser) {
+func TestBrowserVersion(t *testing.T) {
 	const re = `^\d+\.\d+\.\d+\.\d+$`
 	r, _ := regexp.Compile(re)
-	ver := b.Version()
+	ver := newTestBrowser(t).Version()
 	assert.Regexp(t, r, ver, "expected browser version to match regex %q, but found %q", re, ver)
 }
 
 // This only works for Chrome!
 // TODO: Improve this test, see:
 // https://github.com/grafana/xk6-browser/pull/51#discussion_r742696736
-func testBrowserUserAgent(t *testing.T, b api.Browser) {
+func TestBrowserUserAgent(t *testing.T) {
+	b := newTestBrowser(t)
+
 	// testBrowserVersion() tests the version already
 	// just look for "Headless" in UserAgent
 	ua := b.UserAgent()

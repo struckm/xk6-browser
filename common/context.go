@@ -20,13 +20,14 @@
 
 package common
 
-import "context"
+import (
+	"context"
+)
 
 type ctxKey int
 
 const (
 	ctxKeyLaunchOptions ctxKey = iota
-	ctxKeyPid
 	ctxKeyHooks
 )
 
@@ -54,13 +55,16 @@ func GetLaunchOptions(ctx context.Context) *LaunchOptions {
 	return v.(*LaunchOptions)
 }
 
-// WithProcessID saves the browser process ID to the context.
-func WithProcessID(ctx context.Context, pid int) context.Context {
-	return context.WithValue(ctx, ctxKeyPid, pid)
-}
-
-// GetProcessID returns the browser process ID from the context.
-func GetProcessID(ctx context.Context) int {
-	v, _ := ctx.Value(ctxKeyPid).(int)
-	return v // it will return zero on error
+// contextWithDoneChan returns a new context that is canceled either
+// when the done channel is closed or ctx is canceled.
+func contextWithDoneChan(ctx context.Context, done chan struct{}) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	go func() {
+		defer cancel()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}()
+	return ctx
 }

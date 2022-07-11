@@ -23,6 +23,9 @@ package common
 import (
 	"context"
 	"os"
+
+	"github.com/grafana/xk6-browser/log"
+	"github.com/grafana/xk6-browser/storage"
 )
 
 type BrowserProcess struct {
@@ -32,7 +35,7 @@ type BrowserProcess struct {
 	// The process of the browser, if running locally.
 	process *os.Process
 
-	// Channels to for managing termination.
+	// Channels for managing termination.
 	lostConnection             chan struct{}
 	processIsGracefullyClosing chan struct{}
 
@@ -40,16 +43,13 @@ type BrowserProcess struct {
 	wsURL string
 
 	// The directory where user data for the browser is stored.
-	userDataDir string
+	userDataDir *storage.Dir
 
-	logger *Logger
+	logger *log.Logger
 }
 
 func NewBrowserProcess(
-	ctx context.Context,
-	cancel context.CancelFunc,
-	process *os.Process,
-	wsURL, userDataDir string,
+	ctx context.Context, cancel context.CancelFunc, process *os.Process, wsURL string, dataDir *storage.Dir,
 ) *BrowserProcess {
 	p := BrowserProcess{
 		ctx:                        ctx,
@@ -58,7 +58,7 @@ func NewBrowserProcess(
 		lostConnection:             make(chan struct{}),
 		processIsGracefullyClosing: make(chan struct{}),
 		wsURL:                      wsURL,
-		userDataDir:                userDataDir,
+		userDataDir:                dataDir,
 	}
 	go func() {
 		// If we lose connection to the browser and we're not in-progress with clean
@@ -77,29 +77,39 @@ func (p *BrowserProcess) didLoseConnection() {
 	close(p.lostConnection)
 }
 
-// GracefulClose triggers a graceful closing of the browser process
+func (p *BrowserProcess) isConnected() bool {
+	var ok bool
+	select {
+	case _, ok = <-p.lostConnection:
+	default:
+		ok = true
+	}
+	return ok
+}
+
+// GracefulClose triggers a graceful closing of the browser process.
 func (p *BrowserProcess) GracefulClose() {
 	p.logger.Debugf("Browser:GracefulClose", "")
 	close(p.processIsGracefullyClosing)
 }
 
-// Terminate triggers the termination of the browser process
+// Terminate triggers the termination of the browser process.
 func (p *BrowserProcess) Terminate() {
 	p.logger.Debugf("Browser:Close", "browserProc terminate")
 	p.cancel()
 }
 
-// WsURL returns the Websocket URL that the browser is listening on for CDP clients
+// WsURL returns the Websocket URL that the browser is listening on for CDP clients.
 func (p *BrowserProcess) WsURL() string {
 	return p.wsURL
 }
 
-// Pid returns the browser process ID
+// Pid returns the browser process ID.
 func (p *BrowserProcess) Pid() int {
 	return p.process.Pid
 }
 
-// WithLogger attaches a logger to the browser process
-func (p *BrowserProcess) AttachLogger(logger *Logger) {
+// AttachLogger attaches a logger to the browser process.
+func (p *BrowserProcess) AttachLogger(logger *log.Logger) {
 	p.logger = logger
 }

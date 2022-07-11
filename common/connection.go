@@ -23,6 +23,8 @@ package common
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -36,13 +38,35 @@ import (
 	"github.com/mailru/easyjson"
 	"github.com/mailru/easyjson/jlexer"
 	"github.com/mailru/easyjson/jwriter"
+
+	"github.com/grafana/xk6-browser/log"
 )
 
 const wsWriteBufferSize = 1 << 20
 
-// Ensure Connection implements the EventEmitter and Executor interfaces
+// Ensure Connection implements the EventEmitter and Executor interfaces.
 var _ EventEmitter = &Connection{}
 var _ cdp.Executor = &Connection{}
+
+type executorEmitter interface {
+	cdp.Executor
+	EventEmitter
+}
+
+type connection interface {
+	executorEmitter
+	Close(...goja.Value)
+	getSession(target.SessionID) *Session
+}
+
+type session interface {
+	cdp.Executor
+	executorEmitter
+	ExecuteWithoutExpectationOnReply(context.Context, string, easyjson.Marshaler, easyjson.Unmarshaler) error
+	ID() target.SessionID
+	TargetID() target.ID
+	Done() <-chan struct{}
+}
 
 // Action is the general interface of an CDP action.
 type Action interface {
@@ -88,14 +112,14 @@ func (f ActionFunc) Do(ctx context.Context) error {
 │Registers with session as a├─────────────■                    │                         │                    │
 │handler for a specific CDP │             │   Event Listener   │      *  *  *  *  *      │   Event Listener   │
 │       Domain event.       │             │                    │                         │                    │
-└───────────────────────────┘             └────────────────────┘                         └────────────────────┘
+└───────────────────────────┘             └────────────────────┘                         └────────────────────┘.
 */
 type Connection struct {
 	BaseEventEmitter
 
 	ctx          context.Context
 	wsURL        string
-	logger       *Logger
+	logger       *log.Logger
 	conn         *websocket.Conn
 	sendCh       chan *cdproto.Message
 	recvCh       chan *cdproto.Message
@@ -113,8 +137,8 @@ type Connection struct {
 	encoder jwriter.Writer
 }
 
-// NewConnection creates a new browser
-func NewConnection(ctx context.Context, wsURL string, logger *Logger) (*Connection, error) {
+// NewConnection creates a new browser.
+func NewConnection(ctx context.Context, wsURL string, logger *log.Logger) (*Connection, error) {
 	var header http.Header
 	var tlsConfig *tls.Config
 	wsd := websocket.Dialer{
@@ -153,8 +177,9 @@ func NewConnection(ctx context.Context, wsURL string, logger *Logger) (*Connecti
 // closeConnection cleanly closes the WebSocket connection.
 // Returns an error if sending the close control frame fails.
 func (c *Connection) closeConnection(code int) error {
-	var err error
+	c.logger.Debugf("Connection:closeConnection", "code:%d", code)
 
+	var err error
 	c.shutdownOnce.Do(func() {
 		defer func() {
 			_ = c.conn.Close()
@@ -234,6 +259,7 @@ func (c *Connection) handleIOError(err error) {
 func (c *Connection) getSession(id target.SessionID) *Session {
 	c.sessionsMu.RLock()
 	defer c.sessionsMu.RUnlock()
+
 	return c.sessions[id]
 }
 
@@ -255,8 +281,10 @@ func (c *Connection) recvLoop() {
 	for {
 		_, buf, err := c.conn.ReadMessage()
 		if err != nil {
-			c.handleIOError(err)
-			c.logger.Debugf("Connection:recvLoop", "wsURL:%q ioErr:%v", c.wsURL, err)
+			if !errors.Is(err, net.ErrClosed) {
+				c.logger.Debugf("Connection:recvLoop", "wsURL:%q ioErr:%v", c.wsURL, err)
+				c.handleIOError(err)
+			}
 			return
 		}
 
@@ -285,9 +313,10 @@ func (c *Connection) recvLoop() {
 			}
 			eva := ev.(*target.EventAttachedToTarget)
 			sid, tid := eva.SessionID, eva.TargetInfo.TargetID
+
 			c.sessionsMu.Lock()
 			session := NewSession(c.ctx, c, sid, tid, c.logger)
-			c.logger.Debugf("Connection:recvLoop:EventAttachedToTarget", "sid:%v tid:%v wsURL:%q, NewSession", sid, tid, c.wsURL)
+			c.logger.Debugf("Connection:recvLoop:EventAttachedToTarget", "sid:%v tid:%v wsURL:%q", sid, tid, c.wsURL)
 			c.sessions[sid] = session
 			c.sessionsMu.Unlock()
 		} else if msg.Method == cdproto.EventTargetDetachedFromTarget {
@@ -299,7 +328,6 @@ func (c *Connection) recvLoop() {
 			evt := ev.(*target.EventDetachedFromTarget)
 			sid := evt.SessionID
 			tid := c.findTargetIDForLog(sid)
-			c.logger.Debugf("Connection:recvLoop:EventDetachedFromTarget", "sid:%v tid:%v wsURL:%q, closeSession", sid, tid, c.wsURL)
 			c.closeSession(sid, tid)
 		}
 
@@ -327,7 +355,7 @@ func (c *Connection) recvLoop() {
 			}
 
 		case msg.Method != "":
-			c.logger.Debugf("Connection:recvLoop:msg.Method:emit", "method:%q", msg.Method)
+			c.logger.Debugf("Connection:recvLoop:msg.Method:emit", "sid:%v method:%q", msg.SessionID, msg.Method)
 			ev, err := cdproto.UnmarshalMessage(&msg)
 			if err != nil {
 				c.logger.Errorf("cdp", "%s", err)
@@ -336,7 +364,7 @@ func (c *Connection) recvLoop() {
 			c.emit(string(msg.Method), ev)
 
 		case msg.ID != 0:
-			c.logger.Debugf("Connection:recvLoop:msg.ID:emit", "method:%q", msg.ID)
+			c.logger.Debugf("Connection:recvLoop:msg.ID:emit", "sid:%v method:%q", msg.SessionID, msg.Method)
 			c.emit("", &msg)
 
 		default:
@@ -345,7 +373,7 @@ func (c *Connection) recvLoop() {
 	}
 }
 
-func (c *Connection) send(msg *cdproto.Message, recvCh chan *cdproto.Message, res easyjson.Unmarshaler) error {
+func (c *Connection) send(ctx context.Context, msg *cdproto.Message, recvCh chan *cdproto.Message, res easyjson.Unmarshaler) error {
 	select {
 	case c.sendCh <- msg:
 	case err := <-c.errorCh:
@@ -358,6 +386,12 @@ func (c *Connection) send(msg *cdproto.Message, recvCh chan *cdproto.Message, re
 	case <-c.done:
 		c.logger.Debugf("Connection:send:<-c.done", "wsURL:%q sid:%v", c.wsURL, msg.SessionID)
 		return nil
+	case <-ctx.Done():
+		c.logger.Errorf("Connection:send:<-ctx.Done()", "wsURL:%q sid:%v err:%v", c.wsURL, msg.SessionID, c.ctx.Err())
+		return ctx.Err()
+	case <-c.ctx.Done():
+		c.logger.Errorf("Connection:send:<-c.ctx.Done()", "wsURL:%q sid:%v err:%v", c.wsURL, msg.SessionID, c.ctx.Err())
+		return ctx.Err()
 	}
 
 	// Block waiting for response.
@@ -392,13 +426,12 @@ func (c *Connection) send(msg *cdproto.Message, recvCh chan *cdproto.Message, re
 		return &websocket.CloseError{Code: code}
 	case <-c.done:
 		c.logger.Debugf("Connection:send:<-c.done #2", "sid:%v tid:%v wsURL:%q", msg.SessionID, tid, c.wsURL)
+	case <-ctx.Done():
+		c.logger.Debugf("Connection:send:<-ctx.Done()", "sid:%v tid:%v wsURL:%q err:%v", msg.SessionID, tid, c.wsURL, c.ctx.Err())
+		return ctx.Err()
 	case <-c.ctx.Done():
 		c.logger.Debugf("Connection:send:<-c.ctx.Done()", "sid:%v tid:%v wsURL:%q err:%v", msg.SessionID, tid, c.wsURL, c.ctx.Err())
-		// TODO: this brings many bugs to the surface
 		return c.ctx.Err()
-		// TODO: add a timeout?
-		// case <-timeout:
-		// 	return
 	}
 	return nil
 }
@@ -440,15 +473,13 @@ func (c *Connection) sendLoop() {
 		case code := <-c.closeCh:
 			c.logger.Debugf("Connection:sendLoop:<-c.closeCh", "wsURL:%q code:%d", c.wsURL, code)
 			_ = c.closeConnection(code)
+			return
 		case <-c.done:
 			c.logger.Debugf("Connection:sendLoop:<-c.done#2", "wsURL:%q", c.wsURL)
+			return
 		case <-c.ctx.Done():
 			c.logger.Debugf("connection:sendLoop", "returning, ctx.Err: %q", c.ctx.Err())
 			return
-			// case <-time.After(time.Second * 10):
-			// 	c.logger.Errorf("connection:sendLoop", "returning, timeout")
-			// 	c.Close()
-			// 	return
 		}
 	}
 }
@@ -462,7 +493,7 @@ func (c *Connection) Close(args ...goja.Value) {
 	_ = c.closeConnection(code)
 }
 
-// Execute implements cdproto.Executor and performs a synchronous send and receive
+// Execute implements cdproto.Executor and performs a synchronous send and receive.
 func (c *Connection) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
 	c.logger.Debugf("connection:Execute", "wsURL:%q method:%q", c.wsURL, method)
 	id := atomic.AddInt64(&c.msgID, 1)
@@ -510,5 +541,5 @@ func (c *Connection) Execute(ctx context.Context, method string, params easyjson
 		Method: cdproto.MethodType(method),
 		Params: buf,
 	}
-	return c.send(msg, ch, res)
+	return c.send(c.ctx, msg, ch, res)
 }

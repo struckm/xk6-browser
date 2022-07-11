@@ -29,11 +29,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/grafana/xk6-browser/k6ext"
+
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/dop251/goja"
 	"github.com/hashicorp/go-multierror"
 	"github.com/sirupsen/logrus"
-	k6common "go.k6.io/k6/js/common"
 )
 
 type objectOverflowError struct{}
@@ -51,7 +52,7 @@ type objectPropertyParseError struct {
 // Error returns the reason of the failure, including the wrapper parsing error
 // message.
 func (pe *objectPropertyParseError) Error() string {
-	return fmt.Sprintf("failed parsing object property %q: %s", pe.property, pe.error)
+	return fmt.Sprintf("parsing object property %q: %s", pe.property, pe.error)
 }
 
 // Unwrap returns the wrapped parsing error.
@@ -115,6 +116,22 @@ func parseRemoteObjectValue(t cdpruntime.Type, val string, op *cdpruntime.Object
 	return v, nil
 }
 
+func parseExceptionDetails(exc *cdpruntime.ExceptionDetails) string {
+	if exc == nil {
+		return ""
+	}
+	var errMsg string
+	if exc.Exception != nil {
+		errMsg = exc.Exception.Description
+		if errMsg == "" {
+			if o, _ := parseRemoteObject(exc.Exception); o != nil {
+				errMsg = fmt.Sprintf("%s", o)
+			}
+		}
+	}
+	return errMsg
+}
+
 func parseRemoteObject(obj *cdpruntime.RemoteObject) (interface{}, error) {
 	if obj.UnserializableValue == "" {
 		return parseRemoteObjectValue(obj.Type, string(obj.Value), obj.Preview)
@@ -139,7 +156,7 @@ func valueFromRemoteObject(ctx context.Context, robj *cdpruntime.RemoteObject) (
 	if val == "undefined" {
 		return goja.Undefined(), err
 	}
-	return k6common.GetRuntime(ctx).ToValue(val), err
+	return k6ext.Runtime(ctx).ToValue(val), err
 }
 
 func handleParseRemoteObjectErr(ctx context.Context, err error, logger *logrus.Entry) {
@@ -149,8 +166,8 @@ func handleParseRemoteObjectErr(ctx context.Context, err error, logger *logrus.E
 	)
 	merr, ok := err.(*multierror.Error)
 	if !ok {
-		// If this throws it's a bug :)
-		k6Throw(ctx, "unable to parse remote object value: %w", err)
+		// If this panics it's a bug :)
+		k6ext.Panic(ctx, "parsing remote object value: %w", err)
 	}
 	for _, e := range merr.Errors {
 		switch {
@@ -159,8 +176,8 @@ func handleParseRemoteObjectErr(ctx context.Context, err error, logger *logrus.E
 		case errors.As(e, &ope):
 			logger.WithError(ope).Error()
 		default:
-			// If this throws it's a bug :)
-			k6Throw(ctx, "unable to parse remote object value: %w", e)
+			// If this panics it's a bug :)
+			k6ext.Panic(ctx, "parsing remote object value: %w", e)
 		}
 	}
 }

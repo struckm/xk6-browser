@@ -29,18 +29,18 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/mailru/easyjson"
-	k6lib "go.k6.io/k6/lib"
+
+	"github.com/grafana/xk6-browser/log"
 )
 
-// Ensure Session implements the EventEmitter and Executor interfaces
+// Ensure Session implements the EventEmitter and Executor interfaces.
 var _ EventEmitter = &Session{}
 var _ cdp.Executor = &Session{}
 
-// Session represents a CDP session to a target
+// Session represents a CDP session to a target.
 type Session struct {
 	BaseEventEmitter
 
-	ctx      context.Context
 	conn     *Connection
 	id       target.SessionID
 	targetID target.ID
@@ -50,14 +50,15 @@ type Session struct {
 	closed   bool
 	crashed  bool
 
-	logger *Logger
+	logger *log.Logger
 }
 
-// NewSession creates a new session
-func NewSession(ctx context.Context, conn *Connection, id target.SessionID, tid target.ID, logger *Logger) *Session {
+// NewSession creates a new session.
+func NewSession(
+	ctx context.Context, conn *Connection, id target.SessionID, tid target.ID, logger *log.Logger,
+) *Session {
 	s := Session{
 		BaseEventEmitter: NewBaseEventEmitter(ctx),
-		ctx:              ctx,
 		conn:             conn,
 		id:               id,
 		targetID:         tid,
@@ -69,6 +70,16 @@ func NewSession(ctx context.Context, conn *Connection, id target.SessionID, tid 
 	s.logger.Debugf("Session:NewSession", "sid:%v tid:%v", id, tid)
 	go s.readLoop()
 	return &s
+}
+
+// ID returns session ID.
+func (s *Session) ID() target.SessionID {
+	return s.id
+}
+
+// TargetID returns session's target ID.
+func (s *Session) TargetID() target.ID {
+	return s.targetID
 }
 
 func (s *Session) close() {
@@ -90,24 +101,25 @@ func (s *Session) markAsCrashed() {
 	s.crashed = true
 }
 
-// Wraps conn.ReadMessage in a channel
+// Wraps conn.ReadMessage in a channel.
 func (s *Session) readLoop() {
-	state := k6lib.GetState(s.ctx)
-
 	for {
 		select {
 		case msg := <-s.readCh:
 			ev, err := cdproto.UnmarshalMessage(msg)
+			if errors.Is(err, cdp.ErrUnknownCommandOrEvent("")) && msg.Method == "" {
+				// Results from commands may not always have methods in them.
+				// This is the reason of this error. So it's harmless.
+				//
+				// Also:
+				// This is most likely an event received from an older
+				// Chrome which a newer cdproto doesn't have, as it is
+				// deprecated. Ignore that error, and emit raw cdproto.Message.
+				s.emit("", msg)
+				continue
+			}
 			if err != nil {
 				s.logger.Debugf("Session:readLoop:<-s.readCh", "sid:%v tid:%v cannot unmarshal: %v", s.id, s.targetID, err)
-				if _, ok := err.(cdp.ErrUnknownCommandOrEvent); ok {
-					// This is most likely an event received from an older
-					// Chrome which a newer cdproto doesn't have, as it is
-					// deprecated. Ignore that error, and emit raw cdproto.Message.
-					s.emit("", msg)
-					continue
-				}
-				state.Logger.Errorf("%s", err)
 				continue
 			}
 			s.emit(string(msg.Method), ev)
@@ -118,7 +130,7 @@ func (s *Session) readLoop() {
 	}
 }
 
-// Execute implements the cdp.Executor interface
+// Execute implements the cdp.Executor interface.
 func (s *Session) Execute(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
 	s.logger.Debugf("Session:Execute", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
 	// Certain methods aren't available to the user directly.
@@ -126,7 +138,7 @@ func (s *Session) Execute(ctx context.Context, method string, params easyjson.Ma
 		return errors.New("to close the target, cancel its context")
 	}
 	if s.crashed {
-		s.logger.Debugf("Session:Execute", "sid:%v tid:%v method:%q, returns: crashed", s.id, s.targetID, method)
+		s.logger.Debugf("Session:Execute:return", "sid:%v tid:%v method:%q crashed", s.id, s.targetID, method)
 		return ErrTargetCrashed
 	}
 
@@ -140,13 +152,13 @@ func (s *Session) Execute(ctx context.Context, method string, params easyjson.Ma
 		for {
 			select {
 			case <-evCancelCtx.Done():
-				s.logger.Debugf("Session:Execute:<-evCancelCtx.Done()", "sid:%v tid:%v method:%q, returns", s.id, s.targetID, method)
+				s.logger.Debugf("Session:Execute:<-evCancelCtx.Done():return", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
 				return
 			case ev := <-chEvHandler:
 				if msg, ok := ev.data.(*cdproto.Message); ok && msg.ID == id {
 					select {
 					case <-evCancelCtx.Done():
-						s.logger.Debugf("Session:Execute:<-evCancelCtx.Done():2", "sid:%v tid:%v method:%q, returns", s.id, s.targetID, method)
+						s.logger.Debugf("Session:Execute:<-evCancelCtx.Done():2:return", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
 					case ch <- msg:
 						// We expect only one response with the matching message ID,
 						// then remove event handler by cancelling context and stopping goroutine.
@@ -160,7 +172,8 @@ func (s *Session) Execute(ctx context.Context, method string, params easyjson.Ma
 	s.onAll(evCancelCtx, chEvHandler)
 	defer evCancelFn() // Remove event handler
 
-	// Send the message
+	s.logger.Debugf("Session:Execute:s.conn.send", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
+
 	var buf []byte
 	if params != nil {
 		var err error
@@ -175,8 +188,7 @@ func (s *Session) Execute(ctx context.Context, method string, params easyjson.Ma
 		Method:    cdproto.MethodType(method),
 		Params:    buf,
 	}
-	s.logger.Debugf("Session:Execute:s.conn.send", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
-	return s.conn.send(msg, ch, res)
+	return s.conn.send(contextWithDoneChan(ctx, s.done), msg, ch, res)
 }
 
 func (s *Session) ExecuteWithoutExpectationOnReply(ctx context.Context, method string, params easyjson.Marshaler, res easyjson.Unmarshaler) error {
@@ -190,9 +202,8 @@ func (s *Session) ExecuteWithoutExpectationOnReply(ctx context.Context, method s
 		return ErrTargetCrashed
 	}
 
-	id := atomic.AddInt64(&s.msgID, 1)
+	s.logger.Debugf("Session:Execute:s.conn.send", "sid:%v tid:%v method:%q", s.id, s.targetID, method)
 
-	// Send the message
 	var buf []byte
 	if params != nil {
 		var err error
@@ -203,7 +214,7 @@ func (s *Session) ExecuteWithoutExpectationOnReply(ctx context.Context, method s
 		}
 	}
 	msg := &cdproto.Message{
-		ID: id,
+		ID: atomic.AddInt64(&s.msgID, 1),
 		// We use different sessions to send messages to "targets"
 		// (browser, page, frame etc.) in CDP.
 		//
@@ -222,5 +233,10 @@ func (s *Session) ExecuteWithoutExpectationOnReply(ctx context.Context, method s
 		Method:    cdproto.MethodType(method),
 		Params:    buf,
 	}
-	return s.conn.send(msg, nil, res)
+	return s.conn.send(contextWithDoneChan(ctx, s.done), msg, nil, res)
+}
+
+// Done returns a channel that is closed when this session is closed.
+func (s *Session) Done() <-chan struct{} {
+	return s.done
 }

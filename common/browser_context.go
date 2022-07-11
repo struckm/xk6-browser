@@ -22,66 +22,76 @@ package common
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"time"
 
+	"github.com/grafana/xk6-browser/api"
+	"github.com/grafana/xk6-browser/k6ext"
+	"github.com/grafana/xk6-browser/log"
+
+	k6modules "go.k6.io/k6/js/modules"
+
 	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/storage"
+	"github.com/chromedp/cdproto/target"
 	"github.com/dop251/goja"
-	"github.com/grafana/xk6-browser/api"
-	k6common "go.k6.io/k6/js/common"
 )
 
-// Ensure BrowserContext implements the EventEmitter and api.BrowserContext interfaces
+// Ensure BrowserContext implements the EventEmitter and api.BrowserContext interfaces.
 var _ EventEmitter = &BrowserContext{}
 var _ api.BrowserContext = &BrowserContext{}
 
 // BrowserContext stores context information for a single independent browser session.
 // A newly launched browser instance contains a default browser context.
-// Any browser context created aside from the default will be considered an "ingognito"
+// Any browser context created aside from the default will be considered an "incognito"
 // browser context and will not store any data on disk.
 type BrowserContext struct {
 	BaseEventEmitter
 
 	ctx             context.Context
-	conn            *Connection
 	browser         *Browser
 	id              cdp.BrowserContextID
 	opts            *BrowserContextOptions
 	timeoutSettings *TimeoutSettings
-	logger          *Logger
+	logger          *log.Logger
+	vu              k6modules.VU
 
 	evaluateOnNewDocumentSources []string
 }
 
 // NewBrowserContext creates a new browser context.
-func NewBrowserContext(ctx context.Context, conn *Connection, browser *Browser, id cdp.BrowserContextID, opts *BrowserContextOptions, logger *Logger) *BrowserContext {
+func NewBrowserContext(
+	ctx context.Context, browser *Browser, id cdp.BrowserContextID, opts *BrowserContextOptions, logger *log.Logger,
+) *BrowserContext {
 	b := BrowserContext{
 		BaseEventEmitter: NewBaseEventEmitter(ctx),
 		ctx:              ctx,
-		conn:             conn,
 		browser:          browser,
 		id:               id,
 		opts:             opts,
 		logger:           logger,
+		vu:               k6ext.GetVU(ctx),
 		timeoutSettings:  NewTimeoutSettings(nil),
 	}
+
+	if opts != nil && len(opts.Permissions) > 0 {
+		b.GrantPermissions(opts.Permissions, nil)
+	}
+
 	return &b
 }
 
 func (b *BrowserContext) AddCookies(cookies goja.Value) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.addCookies(cookies) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.addCookies(cookies) has not been implemented yet")
 }
 
 // AddInitScript adds a script that will be initialized on all new pages.
 func (b *BrowserContext) AddInitScript(script goja.Value, arg goja.Value) {
-	b.logger.Debugf("BrowserContext:AddInitScript", "")
+	b.logger.Debugf("BrowserContext:AddInitScript", "bctxid:%v", b.id)
 
-	rt := k6common.GetRuntime(b.ctx)
+	rt := b.vu.Runtime()
 
 	source := ""
 	if script != nil && !goja.IsUndefined(script) && !goja.IsNull(script) {
@@ -120,53 +130,53 @@ func (b *BrowserContext) Browser() api.Browser {
 
 // ClearCookies clears cookies.
 func (b *BrowserContext) ClearCookies() {
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Debugf("BrowserContext:ClearCookies", "bctxid:%v", b.id)
+
 	action := storage.ClearCookies().WithBrowserContextID(b.id)
 	if err := action.Do(b.ctx); err != nil {
-		k6common.Throw(rt, fmt.Errorf("unable to clear cookies permissions: %w", err))
+		k6ext.Panic(b.ctx, "clearing cookies: %w", err)
 	}
 }
 
 // ClearPermissions clears any permission overrides.
 func (b *BrowserContext) ClearPermissions() {
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Debugf("BrowserContext:ClearPermissions", "bctxid:%v", b.id)
+
 	action := cdpbrowser.ResetPermissions().WithBrowserContextID(b.id)
 	if err := action.Do(b.ctx); err != nil {
-		k6common.Throw(rt, fmt.Errorf("unable to clear override permissions: %w", err))
+		k6ext.Panic(b.ctx, "clearing permissions: %w", err)
 	}
 }
 
 // Close shuts down the browser context.
 func (b *BrowserContext) Close() {
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Debugf("BrowserContext:Close", "bctxid:%v", b.id)
+
 	if b.id == "" {
-		k6common.Throw(rt, errors.New("default browser context can't be closed"))
+		k6ext.Panic(b.ctx, "default browser context can't be closed")
 	}
 	if err := b.browser.disposeContext(b.id); err != nil {
-		k6common.Throw(rt, err)
+		k6ext.Panic(b.ctx, "disposing browser context: %w", err)
 	}
 }
 
 func (b *BrowserContext) Cookies() []goja.Object {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.cookies() has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.cookies() has not been implemented yet")
 	return nil
 }
 
 func (b *BrowserContext) ExposeBinding(name string, callback goja.Callable, opts goja.Value) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.exposeBinding(name, callback, opts) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.exposeBinding(name, callback, opts) has not been implemented yet")
 }
 
 func (b *BrowserContext) ExposeFunction(name string, callback goja.Callable) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.newCDPSession(name, callback) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.exposeFunction(name, callback) has not been implemented yet")
 }
 
 // GrantPermissions enables the specified permissions, all others will be disabled.
 func (b *BrowserContext) GrantPermissions(permissions []string, opts goja.Value) {
-	b.logger.Debugf("BrowserContext:GrantPermissions", "")
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Debugf("BrowserContext:GrantPermissions", "bctxid:%v", b.id)
+
 	permsToProtocol := map[string]cdpbrowser.PermissionType{
 		"geolocation":          cdpbrowser.PermissionTypeGeolocation,
 		"midi":                 cdpbrowser.PermissionTypeMidi,
@@ -186,42 +196,55 @@ func (b *BrowserContext) GrantPermissions(permissions []string, opts goja.Value)
 	}
 	origin := ""
 
+	rt := b.vu.Runtime()
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
-			switch k {
-			case "origin":
+			if k == "origin" {
 				origin = opts.Get(k).String()
+				break
 			}
 		}
 	}
 
-	var perms []cdpbrowser.PermissionType
+	perms := make([]cdpbrowser.PermissionType, 0, len(permissions))
 	for _, p := range permissions {
 		perms = append(perms, permsToProtocol[p])
 	}
 
 	action := cdpbrowser.GrantPermissions(perms).WithOrigin(origin).WithBrowserContextID(b.id)
-	if err := action.Do(b.ctx); err != nil {
-		k6common.Throw(rt, fmt.Errorf("unable to override permissions: %w", err))
+	if err := action.Do(cdp.WithExecutor(b.ctx, b.browser.conn)); err != nil {
+		k6ext.Panic(b.ctx, "override permissions: %w", err)
 	}
 }
 
-// NewCDPSession returns a new CDP session attached to this target
+// NewCDPSession returns a new CDP session attached to this target.
 func (b *BrowserContext) NewCDPSession() api.CDPSession {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.newCDPSession() has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.newCDPSession() has not been implemented yet")
 	return nil
 }
 
 // NewPage creates a new page inside this browser context.
 func (b *BrowserContext) NewPage() api.Page {
-	b.logger.Debugf("BrowserContext:NewPage", "b.id:%v", b.id)
+	b.logger.Debugf("BrowserContext:NewPage", "bctxid:%v", b.id)
+
 	p, err := b.browser.newPageInContext(b.id)
 	if err != nil {
-		rt := k6common.GetRuntime(b.ctx)
-		k6common.Throw(rt, err)
+		k6ext.Panic(b.ctx, "newPageInContext: %w", err)
 	}
+
+	var (
+		bctxid cdp.BrowserContextID
+		ptid   target.ID
+	)
+	if b != nil {
+		bctxid = b.id
+	}
+	if p != nil {
+		ptid = p.targetID
+	}
+	b.logger.Debugf("BrowserContext:NewPage:return", "bctxid:%v ptid:%s", bctxid, ptid)
+
 	return p
 }
 
@@ -235,47 +258,58 @@ func (b *BrowserContext) Pages() []api.Page {
 }
 
 func (b *BrowserContext) Route(url goja.Value, handler goja.Callable) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.setHTTPCredentials(httpCredentials) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.route(url, handler) has not been implemented yet")
 }
 
 // SetDefaultNavigationTimeout sets the default navigation timeout in milliseconds.
 func (b *BrowserContext) SetDefaultNavigationTimeout(timeout int64) {
+	b.logger.Debugf("BrowserContext:SetDefaultNavigationTimeout", "bctxid:%v timeout:%d", b.id, timeout)
+
 	b.timeoutSettings.setDefaultNavigationTimeout(timeout)
 }
 
 // SetDefaultTimeout sets the default maximum timeout in milliseconds.
 func (b *BrowserContext) SetDefaultTimeout(timeout int64) {
+	b.logger.Debugf("BrowserContext:SetDefaultTimeout", "bctxid:%v timeout:%d", b.id, timeout)
+
 	b.timeoutSettings.setDefaultTimeout(timeout)
 }
 
 func (b *BrowserContext) SetExtraHTTPHeaders(headers map[string]string) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.setHTTPCredentials(httpCredentials) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.setExtraHTTPHeaders(headers) has not been implemented yet")
 }
 
 // SetGeolocation overrides the geo location of the user.
 func (b *BrowserContext) SetGeolocation(geolocation goja.Value) {
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Debugf("BrowserContext:SetGeolocation", "bctxid:%v", b.id)
+
 	g := NewGeolocation()
 	if err := g.Parse(b.ctx, geolocation); err != nil {
-		k6common.Throw(rt, err)
+		k6ext.Panic(b.ctx, "parsing geo location: %v", err)
 	}
 
 	b.opts.Geolocation = g
 	for _, p := range b.browser.getPages() {
 		if err := p.updateGeolocation(); err != nil {
-			k6common.Throw(rt, err)
+			k6ext.Panic(b.ctx, "updating geo location in target ID %s: %w", p.targetID, err)
 		}
 	}
 }
 
 // SetHTTPCredentials sets username/password credentials to use for HTTP authentication.
+//
+// Deprecated: Create a new BrowserContext with httpCredentials instead.
+// See for details:
+// - https://github.com/microsoft/playwright/issues/2196#issuecomment-627134837
+// - https://github.com/microsoft/playwright/pull/2763
 func (b *BrowserContext) SetHTTPCredentials(httpCredentials goja.Value) {
-	rt := k6common.GetRuntime(b.ctx)
+	b.logger.Warnf("setHTTPCredentials", "setHTTPCredentials is deprecated."+
+		" Create a new BrowserContext with httpCredentials instead.")
+	b.logger.Debugf("BrowserContext:SetHTTPCredentials", "bctxid:%v", b.id)
+
 	c := NewCredentials()
 	if err := c.Parse(b.ctx, httpCredentials); err != nil {
-		k6common.Throw(rt, err)
+		k6ext.Panic(b.ctx, "setting HTTP credentials: %w", err)
 	}
 
 	b.opts.HttpCredentials = c
@@ -286,6 +320,8 @@ func (b *BrowserContext) SetHTTPCredentials(httpCredentials goja.Value) {
 
 // SetOffline toggles the browser's connectivity on/off.
 func (b *BrowserContext) SetOffline(offline bool) {
+	b.logger.Debugf("BrowserContext:SetOffline", "bctxid:%v offline:%t", b.id, offline)
+
 	b.opts.Offline = offline
 	for _, p := range b.browser.getPages() {
 		p.updateOffline()
@@ -293,20 +329,18 @@ func (b *BrowserContext) SetOffline(offline bool) {
 }
 
 func (b *BrowserContext) StorageState(opts goja.Value) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.storageState(opts) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.storageState(opts) has not been implemented yet")
 }
 
 func (b *BrowserContext) Unroute(url goja.Value, handler goja.Callable) {
-	rt := k6common.GetRuntime(b.ctx)
-	k6common.Throw(rt, errors.New("BrowserContext.unroute(url, handler) has not been implemented yet"))
+	k6ext.Panic(b.ctx, "BrowserContext.unroute(url, handler) has not been implemented yet")
 }
 
 func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) interface{} {
-	b.logger.Debugf("BrowserContext:WaitForEvent", "event:%q", event)
 	// TODO: This public API needs Promise support (as return value) to be useful in JS!
+	b.logger.Debugf("BrowserContext:WaitForEvent", "bctxid:%v event:%q", b.id, event)
 
-	rt := k6common.GetRuntime(b.ctx)
+	rt := b.vu.Runtime()
 
 	var isCallable bool
 	var predicateFn goja.Callable = nil
@@ -321,7 +355,7 @@ func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) 
 				case "predicate":
 					predicateFn, isCallable = goja.AssertFunction(opts.Get(k))
 					if !isCallable {
-						k6common.Throw(rt, errors.New("expected callable predicate"))
+						k6ext.Panic(b.ctx, "expected callable predicate")
 					}
 				case "timeout":
 					timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
@@ -330,7 +364,7 @@ func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) 
 		default:
 			predicateFn, isCallable = goja.AssertFunction(optsOrPredicate)
 			if !isCallable {
-				k6common.Throw(rt, errors.New("expected callable predicate"))
+				k6ext.Panic(b.ctx, "expected callable predicate")
 			}
 		}
 	}
@@ -340,16 +374,16 @@ func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) 
 	ch := make(chan interface{})
 
 	go func() {
-		b.logger.Debugf("BrowserContext:WaitForEvent:go()", "starts")
-		defer b.logger.Debugf("BrowserContext:WaitForEvent:go()", "returns")
+		b.logger.Debugf("BrowserContext:WaitForEvent:go():starts", "bctxid:%v", b.id)
+		defer b.logger.Debugf("BrowserContext:WaitForEvent:go():returns", "bctxid:%v", b.id)
 		for {
 			select {
 			case <-evCancelCtx.Done():
-				b.logger.Debugf("BrowserContext:WaitForEvent:go()", "evCancelCtx done")
+				b.logger.Debugf("BrowserContext:WaitForEvent:go():evCancelCtx:done", "bctxid:%v", b.id)
 				return
 			case ev := <-chEvHandler:
 				if ev.typ == EventBrowserContextClose {
-					b.logger.Debugf("BrowserContext:WaitForEvent:go()", "EventBrowserContextClose returns")
+					b.logger.Debugf("BrowserContext:WaitForEvent:go():EventBrowserContextClose:return", "bctxid:%v", b.id)
 					ch <- nil
 					close(ch)
 
@@ -359,11 +393,10 @@ func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) 
 					return
 				}
 				if ev.typ == EventBrowserContextPage {
-					b.logger.Debugf("BrowserContext:WaitForEvent:go()", "EventBrowserContextPage")
-					p := ev.data.(*Page)
-					exported := k6common.Bind(rt, p, &b.ctx)
-					if retVal, err := predicateFn(rt.ToValue(exported)); err == nil && retVal.ToBoolean() {
-						b.logger.Debugf("BrowserContext:WaitForEvent:go()", "EventBrowserContextPage returns")
+					b.logger.Debugf("BrowserContext:WaitForEvent:go():EventBrowserContextPage", "bctxid:%v", b.id)
+					p, _ := ev.data.(*Page)
+					if retVal, err := predicateFn(rt.ToValue(p)); err == nil && retVal.ToBoolean() {
+						b.logger.Debugf("BrowserContext:WaitForEvent:go():EventBrowserContextPage:return", "bctxid:%v", b.id)
 						ch <- p
 						close(ch)
 
@@ -382,13 +415,17 @@ func (b *BrowserContext) WaitForEvent(event string, optsOrPredicate goja.Value) 
 
 	select {
 	case <-b.ctx.Done():
-		b.logger.Debugf("BrowserContext:WaitForEvent", "b.ctx Done")
+		b.logger.Debugf("BrowserContext:WaitForEvent:ctx.Done", "bctxid:%v event:%q", b.id, event)
 	case <-time.After(timeout):
-		b.logger.Debugf("BrowserContext:WaitForEvent", "timeout")
+		b.logger.Debugf("BrowserContext:WaitForEvent:timeout", "bctxid:%v event:%q", b.id, event)
 	case evData := <-ch:
-		b.logger.Debugf("BrowserContext:WaitForEvent", "evData")
+		b.logger.Debugf("BrowserContext:WaitForEvent:evData", "bctxid:%v event:%q", b.id, event)
 		return evData
 	}
-	b.logger.Debugf("BrowserContext:WaitForEvent", "nil return")
+	b.logger.Debugf("BrowserContext:WaitForEvent:return nil", "bctxid:%v event:%q", b.id, event)
 	return nil
+}
+
+func (b *BrowserContext) getSession(id target.SessionID) *Session {
+	return b.browser.conn.getSession(id)
 }

@@ -26,7 +26,8 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
-	k6common "go.k6.io/k6/js/common"
+
+	"github.com/grafana/xk6-browser/k6ext"
 )
 
 type ElementHandleBaseOptions struct {
@@ -39,6 +40,34 @@ type ElementHandleBasePointerOptions struct {
 	ElementHandleBaseOptions
 	Position *Position `json:"position"`
 	Trial    bool      `json:"trial"`
+}
+
+// ScrollPosition is a parameter for scrolling an element.
+type ScrollPosition string
+
+const (
+	// ScrollPositionStart scrolls an element at the top of its parent.
+	ScrollPositionStart ScrollPosition = "start"
+	// ScrollPositionCenter scrolls an element at the center of its parent.
+	ScrollPositionCenter ScrollPosition = "center"
+	// ScrollPositionEnd scrolls an element at the end of its parent.
+	ScrollPositionEnd ScrollPosition = "end"
+	// ScrollPositionNearest scrolls an element at the nearest position of its parent.
+	ScrollPositionNearest ScrollPosition = "nearest"
+)
+
+// ScrollIntoViewOptions change the behavior of ScrollIntoView.
+// See: https://developer.mozilla.org/en-US/docs/Web/API/Element/scrollIntoView
+type ScrollIntoViewOptions struct {
+	// Block defines vertical alignment.
+	// One of start, center, end, or nearest.
+	// Defaults to start.
+	Block ScrollPosition `json:"block"`
+
+	// Inline defines horizontal alignment.
+	// One of start, center, end, or nearest.
+	// Defaults to nearest.
+	Inline ScrollPosition `json:"inline"`
 }
 
 type ElementHandleCheckOptions struct {
@@ -108,20 +137,21 @@ func NewElementHandleBaseOptions(defaultTimeout time.Duration) *ElementHandleBas
 }
 
 func (o *ElementHandleBaseOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
-	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
-		opts := opts.ToObject(rt)
-		for _, k := range opts.Keys() {
-			switch k {
-			case "force":
-				o.Force = opts.Get(k).ToBoolean()
-			case "noWaitAfter":
-				o.NoWaitAfter = opts.Get(k).ToBoolean()
-			case "timeout":
-				o.Timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
-			}
+	if !gojaValueExists(opts) {
+		return nil
+	}
+	gopts := opts.ToObject(k6ext.Runtime(ctx))
+	for _, k := range gopts.Keys() {
+		switch k {
+		case "force":
+			o.Force = gopts.Get(k).ToBoolean()
+		case "noWaitAfter": //nolint:goconst
+			o.NoWaitAfter = gopts.Get(k).ToBoolean()
+		case "timeout":
+			o.Timeout = time.Duration(gopts.Get(k).ToInteger()) * time.Millisecond
 		}
 	}
+
 	return nil
 }
 
@@ -134,7 +164,7 @@ func NewElementHandleBasePointerOptions(defaultTimeout time.Duration) *ElementHa
 }
 
 func (o *ElementHandleBasePointerOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBaseOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -178,7 +208,7 @@ func NewElementHandleClickOptions(defaultTimeout time.Duration) *ElementHandleCl
 }
 
 func (o *ElementHandleClickOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -222,7 +252,7 @@ func NewElementHandleDblclickOptions(defaultTimeout time.Duration) *ElementHandl
 }
 
 func (o *ElementHandleDblclickOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -262,7 +292,7 @@ func NewElementHandleHoverOptions(defaultTimeout time.Duration) *ElementHandleHo
 }
 
 func (o *ElementHandleHoverOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -291,7 +321,7 @@ func NewElementHandlePressOptions(defaultTimeout time.Duration) *ElementHandlePr
 }
 
 func (o *ElementHandlePressOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -327,7 +357,7 @@ func NewElementHandleScreenshotOptions(defaultTimeout time.Duration) *ElementHan
 }
 
 func (o *ElementHandleScreenshotOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		formatSpecified := false
 		opts := opts.ToObject(rt)
@@ -367,7 +397,7 @@ func NewElementHandleSetCheckedOptions(defaultTimeout time.Duration) *ElementHan
 }
 
 func (o *ElementHandleSetCheckedOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
@@ -393,7 +423,7 @@ func NewElementHandleTapOptions(defaultTimeout time.Duration) *ElementHandleTapO
 }
 
 func (o *ElementHandleTapOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -422,7 +452,7 @@ func NewElementHandleTypeOptions(defaultTimeout time.Duration) *ElementHandleTyp
 }
 
 func (o *ElementHandleTypeOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -454,7 +484,7 @@ func NewElementHandleWaitForElementStateOptions(defaultTimeout time.Duration) *E
 }
 
 func (o *ElementHandleWaitForElementStateOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -465,4 +495,16 @@ func (o *ElementHandleWaitForElementStateOptions) Parse(ctx context.Context, opt
 		}
 	}
 	return nil
+}
+
+// ElementHandleDispatchEventOptions are options for ElementHandle.dispatchEvent.
+type ElementHandleDispatchEventOptions struct {
+	*ElementHandleBaseOptions
+}
+
+// NewElementHandleDispatchEventOptions returns a new ElementHandleDispatchEventOptions.
+func NewElementHandleDispatchEventOptions(defaultTimeout time.Duration) *ElementHandleDispatchEventOptions {
+	return &ElementHandleDispatchEventOptions{
+		ElementHandleBaseOptions: NewElementHandleBaseOptions(defaultTimeout),
+	}
 }

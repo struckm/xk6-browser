@@ -27,7 +27,8 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
-	k6common "go.k6.io/k6/js/common"
+
+	"github.com/grafana/xk6-browser/k6ext"
 )
 
 type FrameBaseOptions struct {
@@ -167,7 +168,7 @@ func NewFrameBaseOptions(defaultTimeout time.Duration) *FrameBaseOptions {
 }
 
 func (o *FrameBaseOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -190,7 +191,7 @@ func NewFrameCheckOptions(defaultTimeout time.Duration) *FrameCheckOptions {
 }
 
 func (o *FrameCheckOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -214,7 +215,7 @@ func NewFrameClickOptions(defaultTimeout time.Duration) *FrameClickOptions {
 }
 
 func (o *FrameClickOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleClickOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -238,7 +239,7 @@ func NewFrameDblClickOptions(defaultTimeout time.Duration) *FrameDblclickOptions
 }
 
 func (o *FrameDblclickOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleDblclickOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -262,7 +263,7 @@ func NewFrameFillOptions(defaultTimeout time.Duration) *FrameFillOptions {
 }
 
 func (o *FrameFillOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBaseOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -287,7 +288,7 @@ func NewFrameGotoOptions(defaultReferer string, defaultTimeout time.Duration) *F
 }
 
 func (o *FrameGotoOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -298,10 +299,8 @@ func (o *FrameGotoOptions) Parse(ctx context.Context, opts goja.Value) error {
 				o.Timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
 			case "waitUntil":
 				lifeCycle := opts.Get(k).String()
-				if l, ok := lifecycleEventToID[lifeCycle]; ok {
-					o.WaitUntil = l
-				} else {
-					return fmt.Errorf("%q is not a valid lifecycle", lifeCycle)
+				if err := o.WaitUntil.UnmarshalText([]byte(lifeCycle)); err != nil {
+					return fmt.Errorf("parsing goto options: %w", err)
 				}
 			}
 		}
@@ -317,7 +316,7 @@ func NewFrameHoverOptions(defaultTimeout time.Duration) *FrameHoverOptions {
 }
 
 func (o *FrameHoverOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleHoverOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -471,7 +470,7 @@ func NewFrameSelectOptionOptions(defaultTimeout time.Duration) *FrameSelectOptio
 }
 
 func (o *FrameSelectOptionOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBaseOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -495,7 +494,7 @@ func NewFrameSetContentOptions(defaultTimeout time.Duration) *FrameSetContentOpt
 }
 
 func (o *FrameSetContentOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
@@ -505,10 +504,8 @@ func (o *FrameSetContentOptions) Parse(ctx context.Context, opts goja.Value) err
 				o.Timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
 			case "waitUntil":
 				lifeCycle := opts.Get(k).String()
-				if l, ok := lifecycleEventToID[lifeCycle]; ok {
-					o.WaitUntil = l
-				} else {
-					return fmt.Errorf("%q is not a valid lifecycle", lifeCycle)
+				if err := o.WaitUntil.UnmarshalText([]byte(lifeCycle)); err != nil {
+					return fmt.Errorf("parsing setContent options: %w", err)
 				}
 			}
 		}
@@ -526,7 +523,7 @@ func NewFrameTapOptions(defaultTimeout time.Duration) *FrameTapOptions {
 }
 
 func (o *FrameTapOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -582,7 +579,7 @@ func NewFrameUncheckOptions(defaultTimeout time.Duration) *FrameUncheckOptions {
 }
 
 func (o *FrameUncheckOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if err := o.ElementHandleBasePointerOptions.Parse(ctx, opts); err != nil {
 		return err
 	}
@@ -606,22 +603,31 @@ func NewFrameWaitForFunctionOptions(defaultTimeout time.Duration) *FrameWaitForF
 	}
 }
 
+// Parse JavaScript waitForFunction options.
 func (o *FrameWaitForFunctionOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
+			v := opts.Get(k)
 			switch k {
 			case "timeout":
-				o.Timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
+				o.Timeout = time.Duration(v.ToInteger()) * time.Millisecond
 			case "polling":
-				switch opts.Get(k).ExportType().Kind() {
+				switch v.ExportType().Kind() { //nolint: exhaustive
 				case reflect.Int64:
 					o.Polling = PollingInterval
-					o.Interval = opts.Get(k).ToInteger()
+					o.Interval = v.ToInteger()
+				case reflect.String:
+					if p, ok := pollingTypeToID[v.ToString().String()]; ok {
+						o.Polling = p
+						break
+					}
+					fallthrough
 				default:
-					o.Polling = PollingRaf
+					return fmt.Errorf("wrong polling option value: %q; "+
+						`possible values: "raf", "mutation" or number`, v)
 				}
 			}
 		}
@@ -637,7 +643,7 @@ func NewFrameWaitForLoadStateOptions(defaultTimeout time.Duration) *FrameWaitFor
 }
 
 func (o *FrameWaitForLoadStateOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -659,7 +665,7 @@ func NewFrameWaitForNavigationOptions(defaultTimeout time.Duration) *FrameWaitFo
 }
 
 func (o *FrameWaitForNavigationOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
 		for _, k := range opts.Keys() {
@@ -670,10 +676,8 @@ func (o *FrameWaitForNavigationOptions) Parse(ctx context.Context, opts goja.Val
 				o.Timeout = time.Duration(opts.Get(k).ToInteger()) * time.Millisecond
 			case "waitUntil":
 				lifeCycle := opts.Get(k).String()
-				if l, ok := lifecycleEventToID[lifeCycle]; ok {
-					o.WaitUntil = l
-				} else {
-					return fmt.Errorf("%q is not a valid lifecycle", lifeCycle)
+				if err := o.WaitUntil.UnmarshalText([]byte(lifeCycle)); err != nil {
+					return fmt.Errorf("parsing waitForNavigation options: %w", err)
 				}
 			}
 		}
@@ -690,7 +694,7 @@ func NewFrameWaitForSelectorOptions(defaultTimeout time.Duration) *FrameWaitForS
 }
 
 func (o *FrameWaitForSelectorOptions) Parse(ctx context.Context, opts goja.Value) error {
-	rt := k6common.GetRuntime(ctx)
+	rt := k6ext.Runtime(ctx)
 
 	if opts != nil && !goja.IsUndefined(opts) && !goja.IsNull(opts) {
 		opts := opts.ToObject(rt)
@@ -712,4 +716,16 @@ func (o *FrameWaitForSelectorOptions) Parse(ctx context.Context, opts goja.Value
 	}
 
 	return nil
+}
+
+// FrameDispatchEventOptions are options for Frame.dispatchEvent.
+type FrameDispatchEventOptions struct {
+	*FrameBaseOptions
+}
+
+// NewFrameDispatchEventOptions returns a new FrameDispatchEventOptions.
+func NewFrameDispatchEventOptions(defaultTimeout time.Duration) *FrameDispatchEventOptions {
+	return &FrameDispatchEventOptions{
+		FrameBaseOptions: NewFrameBaseOptions(defaultTimeout),
+	}
 }

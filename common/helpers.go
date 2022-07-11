@@ -26,14 +26,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"reflect"
-	"strings"
 	"time"
 
 	cdpruntime "github.com/chromedp/cdproto/runtime"
 	"github.com/dop251/goja"
-	k6common "go.k6.io/k6/js/common"
+
+	"github.com/grafana/xk6-browser/k6ext"
 )
 
 func convertBaseJSHandleTypes(ctx context.Context, execCtx *ExecutionContext, objHandle *BaseJSHandle) (*cdpruntime.CallArgument, error) {
@@ -54,47 +52,57 @@ func convertBaseJSHandleTypes(ctx context.Context, execCtx *ExecutionContext, ob
 	return &cdpruntime.CallArgument{ObjectID: objHandle.remoteObject.ObjectID}, nil
 }
 
-func convertArgument(ctx context.Context, execCtx *ExecutionContext, arg goja.Value) (*cdpruntime.CallArgument, error) {
-	switch arg.ExportType() {
-	case reflect.TypeOf(int64(0)):
-		if arg.ToInteger() > math.MaxInt32 {
-			return &cdpruntime.CallArgument{
-				UnserializableValue: cdpruntime.UnserializableValue(fmt.Sprintf("%dn", arg.ToInteger())),
-			}, nil
-		}
-		b, err := json.Marshal(arg.ToInteger())
-		return &cdpruntime.CallArgument{Value: b}, err
-	case reflect.TypeOf(float64(0)):
-		f := arg.ToFloat()
-		if f == math.Float64frombits(0|(1<<63)) {
-			return &cdpruntime.CallArgument{
-				UnserializableValue: cdpruntime.UnserializableValue("-0"),
-			}, nil
-		} else if f == math.Inf(0) {
-			return &cdpruntime.CallArgument{
-				UnserializableValue: cdpruntime.UnserializableValue("Infinity"),
-			}, nil
-		} else if f == math.Inf(-1) {
-			return &cdpruntime.CallArgument{
-				UnserializableValue: cdpruntime.UnserializableValue("-Infinity"),
-			}, nil
-		} else if math.IsNaN(f) {
-			return &cdpruntime.CallArgument{
-				UnserializableValue: cdpruntime.UnserializableValue("NaN"),
-			}, nil
-		}
-		b, err := json.Marshal(f)
-		return &cdpruntime.CallArgument{Value: b}, err
-	case reflect.TypeOf(&ElementHandle{}):
-		objHandle := arg.Export().(*ElementHandle)
-		return convertBaseJSHandleTypes(ctx, execCtx, &objHandle.BaseJSHandle)
-	case reflect.TypeOf(&BaseJSHandle{}):
-		objHandle := arg.Export().(*BaseJSHandle)
-		return convertBaseJSHandleTypes(ctx, execCtx, objHandle)
-
+//nolint: cyclop
+func convertArgument(
+	ctx context.Context, execCtx *ExecutionContext, arg interface{},
+) (*cdpruntime.CallArgument, error) {
+	if gojaVal, ok := arg.(goja.Value); ok {
+		arg = gojaVal.Export()
 	}
-	b, err := json.Marshal(arg.Export())
-	return &cdpruntime.CallArgument{Value: b}, err
+	switch a := arg.(type) {
+	case int64:
+		if a > math.MaxInt32 {
+			return &cdpruntime.CallArgument{
+				UnserializableValue: cdpruntime.UnserializableValue(fmt.Sprintf("%dn", a)),
+			}, nil
+		}
+		b, err := json.Marshal(a)
+		return &cdpruntime.CallArgument{Value: b}, err
+	case float64:
+		var unserVal string
+		switch a {
+		case math.Float64frombits(0 | (1 << 63)):
+			unserVal = "-0"
+		case math.Inf(0):
+			unserVal = "Infinity"
+		case math.Inf(-1):
+			unserVal = "-Infinity"
+		default:
+			if math.IsNaN(a) {
+				unserVal = "NaN" //nolint: goconst
+			}
+		}
+
+		if unserVal != "" {
+			return &cdpruntime.CallArgument{
+				UnserializableValue: cdpruntime.UnserializableValue(unserVal),
+			}, nil
+		}
+
+		b, err := json.Marshal(a)
+		if err != nil {
+			err = fmt.Errorf("converting argument '%v': %w", arg, err)
+		}
+
+		return &cdpruntime.CallArgument{Value: b}, err
+	case *ElementHandle:
+		return convertBaseJSHandleTypes(ctx, execCtx, &a.BaseJSHandle)
+	case *BaseJSHandle:
+		return convertBaseJSHandleTypes(ctx, execCtx, a)
+	default:
+		b, err := json.Marshal(a)
+		return &cdpruntime.CallArgument{Value: b}, err
+	}
 }
 
 func callApiWithTimeout(ctx context.Context, fn func(context.Context, chan interface{}, chan error), timeout time.Duration) (interface{}, error) {
@@ -114,7 +122,8 @@ func callApiWithTimeout(ctx context.Context, fn func(context.Context, chan inter
 
 	select {
 	case <-apiCtx.Done():
-		if apiCtx.Err() == context.Canceled {
+		err = apiCtx.Err()
+		if errors.Is(err, context.DeadlineExceeded) {
 			err = ErrTimedOut
 		}
 	case result = <-resultCh:
@@ -122,49 +131,6 @@ func callApiWithTimeout(ctx context.Context, fn func(context.Context, chan inter
 	}
 
 	return result, err
-}
-
-func errorFromDOMError(domErr string) error {
-	switch domErr {
-	case "error:notconnected":
-		return errors.New("element is not attached to the DOM")
-	case "error:notelement":
-		return errors.New("node is not an element")
-	case "error:nothtmlelement":
-		return errors.New("not an HTMLElement")
-	case "error:notfillableelement":
-		return errors.New("element is not an <input>, <textarea> or [contenteditable] element")
-	case "error:notfillableinputtype":
-		return errors.New("input of this type cannot be filled")
-	case "error:notfillablenumberinput":
-		return errors.New("cannot type text into input[type=number]")
-	case "error:notvaliddate":
-		return errors.New("malformed value")
-	case "error:notinput":
-		return errors.New("node is not an HTMLInputElement")
-	case "error:hasnovalue":
-		return errors.New("node is not an HTMLInputElement or HTMLTextAreaElement or HTMLSelectElement")
-	case "error:notselect":
-		return errors.New("element is not a <select> element")
-	case "error:notcheckbox":
-		return errors.New("not a checkbox or radio button")
-	case "error:notmultiplefileinput":
-		return errors.New("non-multiple file input can only accept single file")
-	case "error:strictmodeviolation":
-		return errors.New("strict mode violation, multiple elements were returned for selector query")
-	case "error:notqueryablenode":
-		return errors.New("node is not queryable")
-	case "error:nthnocapture":
-		return errors.New("can't query n-th element in a chained selector with capture")
-	case "error:timeout":
-		return ErrTimedOut
-	default:
-		if strings.HasPrefix(domErr, "error:expectednode:") {
-			i := strings.LastIndex(domErr, ":")
-			return fmt.Errorf("expected node but got %s", domErr[i:])
-		}
-	}
-	return fmt.Errorf(domErr)
 }
 
 func stringSliceContains(s []string, e string) bool {
@@ -223,7 +189,7 @@ func waitForEvent(ctx context.Context, emitter EventEmitter, events []string, pr
 	select {
 	case <-ctx.Done():
 	case <-time.After(timeout):
-		return nil, ErrTimedOut
+		return nil, fmt.Errorf("%w after %s", ErrTimedOut, timeout)
 	case evData := <-ch:
 		return evData, nil
 	}
@@ -231,30 +197,45 @@ func waitForEvent(ctx context.Context, emitter EventEmitter, events []string, pr
 	return nil, nil
 }
 
-// k6Throw throws a k6 error, and before throwing the error, it finds the
-// browser process from the context and kills it if it still exists.
-// TODO: test
-func k6Throw(ctx context.Context, format string, a ...interface{}) {
-	rt := k6common.GetRuntime(ctx)
-	if rt == nil {
-		// this should never happen unless a programmer error
-		panic("cannot get k6 runtime")
-	}
-	defer k6common.Throw(rt, fmt.Errorf(format, a...))
-
-	pid := GetProcessID(ctx)
-	if pid == 0 {
-		// this should never happen unless a programmer error
-		panic("cannot find process id")
-	}
-	p, err := os.FindProcess(pid)
+// panicOrSlowMo panics if err is not nil, otherwise applies slow motion.
+func panicOrSlowMo(ctx context.Context, err error) {
 	if err != nil {
-		// optimistically return and don't kill the process
-		return
+		k6ext.Panic(ctx, "%w", err)
 	}
-	// no need to check the error for waiting the process to release
-	// its resources or whether we could kill it as we're already
-	// dying.
-	_ = p.Release()
-	_ = p.Kill()
+	applySlowMo(ctx)
+}
+
+// TrimQuotes removes surrounding single or double quotes from s.
+// We're not using strings.Trim() to avoid trimming unbalanced values,
+// e.g. `"'arg` shouldn't change.
+// Source: https://stackoverflow.com/a/48451906
+func TrimQuotes(s string) string {
+	if len(s) >= 2 {
+		if c := s[len(s)-1]; s[0] == c && (c == '"' || c == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// gojaValueExists returns true if a given value is not nil and exists
+// (defined and not null) in the goja runtime.
+func gojaValueExists(v goja.Value) bool {
+	return v != nil && !goja.IsUndefined(v) && !goja.IsNull(v)
+}
+
+// asGojaValue return v as a goja value.
+// panics if v is not a goja value.
+func asGojaValue(ctx context.Context, v interface{}) goja.Value {
+	gv, ok := v.(goja.Value)
+	if !ok {
+		k6ext.Panic(ctx, "unexpected type %T", v)
+	}
+	return gv
+}
+
+// gojaValueToString returns v as string.
+// panics if v is not a goja value.
+func gojaValueToString(ctx context.Context, v interface{}) string {
+	return asGojaValue(ctx, v).String()
 }
